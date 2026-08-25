@@ -409,3 +409,98 @@ pub fn calculate_percent_access_isochrone(
         Ok(collection)
     })
 }
+
+/// Save a prebuilt isochrone index to disk
+///
+/// Writes the index to a single binary file that can be reloaded with
+/// :func:`load_isochrone_index`, so the Dijkstra search run for every grid cell
+/// during :func:`create_isochrone_index` only has to happen once.
+///
+/// Parameters
+/// ----------
+/// index : `IsochroneIndex`
+///     The index to write.
+/// path : str
+///     Destination file path. Any existing file is overwritten.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the file cannot be written.
+///
+/// Example
+/// -------
+/// .. code-block:: python
+///
+///     index = ferrobus.create_isochrone_index(model, area_wkt, 9)
+///     ferrobus.save_isochrone_index(index, "city_r9.ferrobus")
+///
+/// Notes
+/// -----
+/// An index is only valid for the transit model it was built against, because it
+/// stores street network node indices. Save and reload both together.
+///
+/// The function releases the GIL while writing.
+#[stubgen]
+#[pyfunction(name = "save_isochrone_index")]
+#[pyo3(signature = (index, path))]
+pub fn py_save_isochrone_index(
+    py: Python<'_>,
+    index: &PyIsochroneIndex,
+    path: &str,
+) -> PyResult<()> {
+    py.detach(|| {
+        ferrobus_core::persist::save_isochrone_index(&index.inner, path).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to save isochrone index: {e}"
+            ))
+        })
+    })
+}
+
+/// Load an isochrone index previously written by :func:`save_isochrone_index`
+///
+/// Parameters
+/// ----------
+/// path : str
+///     Path to a file written by :func:`save_isochrone_index`.
+///
+/// Returns
+/// -------
+/// `IsochroneIndex`
+///     The reloaded index.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the file is missing, is not a ferrobus index file, or was written by a
+///     different version of ferrobus.
+///
+/// Example
+/// -------
+/// .. code-block:: python
+///
+///     model = ferrobus.load_transit_model("city.ferrobus")
+///     index = ferrobus.load_isochrone_index("city_r9.ferrobus")
+///     isochrone = ferrobus.calculate_isochrone(model, origin, 43200, 2, 1800, index)
+///
+/// Notes
+/// -----
+/// The index must be paired with the same transit model it was built against;
+/// pairing it with a different model produces meaningless results.
+///
+/// The function releases the GIL while reading.
+#[stubgen]
+#[pyfunction(name = "load_isochrone_index")]
+#[pyo3(signature = (path))]
+pub fn py_load_isochrone_index(py: Python<'_>, path: &str) -> PyResult<PyIsochroneIndex> {
+    py.detach(|| {
+        let inner = ferrobus_core::persist::load_isochrone_index(path).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to load isochrone index: {e}"
+            ))
+        })?;
+
+        Ok(PyIsochroneIndex { inner })
+    })
+}

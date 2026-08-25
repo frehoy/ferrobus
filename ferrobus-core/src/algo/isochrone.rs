@@ -6,6 +6,7 @@
 use geo::{MultiPolygon, Point, Polygon};
 use hashbrown::HashMap;
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use h3o::{
     CellIndex, LatLng, Resolution,
@@ -18,7 +19,7 @@ use crate::{TransitPoint, multimodal_routing_one_to_many};
 /// Index for isochrone calculation covering a specific area
 /// It contains a grid of hexagonal H3 cells and their respective
 /// transit points.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IsochroneIndex {
     pub grid: Vec<CellIndex>,
     transit_points: Vec<TransitPoint>,
@@ -36,6 +37,15 @@ impl IsochroneIndex {
 
     pub fn resolution(&self) -> u8 {
         self.resoulution
+    }
+
+    #[cfg(test)]
+    pub(crate) fn empty_for_tests() -> Self {
+        Self {
+            grid: Vec::new(),
+            transit_points: Vec::new(),
+            resoulution: 9,
+        }
     }
 }
 

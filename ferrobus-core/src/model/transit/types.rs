@@ -1,6 +1,7 @@
 //! Basic types for public transit data model
 
 use geo::Point;
+use serde::{Deserialize, Serialize};
 
 use crate::loading::FeedInfo;
 
@@ -8,7 +9,7 @@ use crate::loading::FeedInfo;
 pub use crate::types::{RaptorStopId, RouteId, Time};
 
 /// Arrival/departure time at a stop
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StopTime {
     /// Arrival time in seconds from the beginning of the day
     pub arrival: Time,
@@ -17,7 +18,7 @@ pub struct StopTime {
 }
 
 /// Public transport route
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Route {
     /// Number of trips on the route
     pub num_trips: usize,
@@ -32,7 +33,7 @@ pub struct Route {
 }
 
 /// Public transport stop
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stop {
     /// Unique stop identifier
     pub stop_id: String,
@@ -48,18 +49,18 @@ pub struct Stop {
     pub(crate) transfers_len: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedMeta {
     pub feed_info: FeedInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transfer {
     pub target_stop: RaptorStopId,
     pub duration: Time,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Trip {
     pub trip_id: String,
 }

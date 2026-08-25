@@ -20,4 +20,8 @@ pub enum Error {
     InvalidTimeFormat(String),
     #[error("GeoJSON conversion error: {0}")]
     GeoJsonError(String),
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+    #[error("Incompatible artifact file: {0}")]
+    IncompatibleFormat(String),
 }

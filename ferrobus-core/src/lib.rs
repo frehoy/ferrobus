@@ -4,6 +4,7 @@ pub mod algo;
 pub mod error;
 pub mod loading;
 pub mod model;
+pub mod persist;
 pub mod prelude;
 pub mod routing;
 pub mod types;
@@ -18,6 +19,10 @@ pub const WALKING_SPEED: f64 = 1.4;
 pub use error::Error;
 pub use loading::{TransitModelConfig, create_transit_model};
 pub use model::{PublicTransitData, Route, Stop, TransitModel, TransitPoint};
+pub use persist::{
+    load_isochrone_index, load_or_create_transit_model, load_transit_model, save_isochrone_index,
+    save_transit_model,
+};
 pub use routing::multimodal_routing::{
     MultiModalResult, multimodal_routing, multimodal_routing_one_to_many,
 };

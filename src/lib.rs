@@ -2,10 +2,14 @@ use pyo3::prelude::*;
 
 use isochrone::{
     PyIsochroneIndex, calculate_bulk_isochrones, calculate_isochrone,
-    calculate_percent_access_isochrone, create_isochrone_index,
+    calculate_percent_access_isochrone, create_isochrone_index, py_load_isochrone_index,
+    py_save_isochrone_index,
 };
 use matrix::{travel_time_matrix, travel_time_statistics};
-use model::{PyTransitModel, py_create_transit_model};
+use model::{
+    PyTransitModel, py_create_transit_model, py_load_or_create_transit_model,
+    py_load_transit_model, py_save_transit_model,
+};
 use range_routing::{
     PyRangeRoutingResult, py_pareto_range_multimodal_routing, py_range_multimodal_routing,
 };
@@ -94,6 +98,9 @@ fn ferrobus(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTransitModel>()?;
     m.add_class::<PyTransitPoint>()?;
     m.add_function(wrap_pyfunction!(py_create_transit_model, m)?)?;
+    m.add_function(wrap_pyfunction!(py_save_transit_model, m)?)?;
+    m.add_function(wrap_pyfunction!(py_load_transit_model, m)?)?;
+    m.add_function(wrap_pyfunction!(py_load_or_create_transit_model, m)?)?;
 
     m.add_function(wrap_pyfunction!(find_route, m)?)?;
     m.add_function(wrap_pyfunction!(find_routes_one_to_many, m)?)?;
@@ -109,6 +116,8 @@ fn ferrobus(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(calculate_isochrone, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_bulk_isochrones, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_percent_access_isochrone, m)?)?;
+    m.add_function(wrap_pyfunction!(py_save_isochrone_index, m)?)?;
+    m.add_function(wrap_pyfunction!(py_load_isochrone_index, m)?)?;
 
     m.add_class::<PyRangeRoutingResult>()?;
     m.add_function(wrap_pyfunction!(py_range_multimodal_routing, m)?)?;

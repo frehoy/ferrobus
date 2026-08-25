@@ -165,3 +165,182 @@ pub fn py_create_transit_model(
         Ok(PyTransitModel { model })
     })
 }
+
+/// Save a prebuilt transit model to disk
+///
+/// Writes the model to a single binary file that can be reloaded with
+/// :func:`load_transit_model`. The file is self-contained: reloading it needs
+/// neither the OSM extract nor the GTFS feeds the model was built from.
+///
+/// This turns model construction into a one-off cost. Build the model once in a
+/// preparation step, save it, and have every later run — or every worker process
+/// — load the snapshot instead of reparsing the source data.
+///
+/// Parameters
+/// ----------
+/// `transit_model` : `TransitModel`
+///     The model to write.
+/// path : str
+///     Destination file path. Any existing file is overwritten.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the file cannot be written.
+///
+/// Example
+/// -------
+/// .. code-block:: python
+///
+///     model = ferrobus.create_transit_model("city.osm.pbf", ["gtfs"], None)
+///     ferrobus.save_transit_model(model, "city.ferrobus")
+///
+/// Notes
+/// -----
+/// The file format is tied to the ferrobus version that wrote it and is not a
+/// stable interchange format. Rebuild the file after upgrading ferrobus.
+///
+/// The function releases the GIL while writing.
+#[stubgen]
+#[pyfunction(name = "save_transit_model")]
+#[pyo3(signature = (transit_model, path))]
+pub fn py_save_transit_model(
+    py: Python<'_>,
+    transit_model: &PyTransitModel,
+    path: &str,
+) -> PyResult<()> {
+    py.detach(|| {
+        ferrobus_core::persist::save_transit_model(&transit_model.model, path).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to save transit model: {e}"
+            ))
+        })
+    })
+}
+
+/// Load a transit model previously written by :func:`save_transit_model`
+///
+/// The loaded model is checked for structural consistency before it is returned,
+/// so a truncated or corrupted file fails here rather than during routing.
+///
+/// Parameters
+/// ----------
+/// path : str
+///     Path to a file written by :func:`save_transit_model`.
+///
+/// Returns
+/// -------
+/// `TransitModel`
+///     The reloaded model, ready for routing operations.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the file is missing, is not a ferrobus model file, was written by a
+///     different version of ferrobus, or fails the consistency check.
+///
+/// Example
+/// -------
+/// .. code-block:: python
+///
+///     model = ferrobus.load_transit_model("city.ferrobus")
+///     origin = ferrobus.create_transit_point(52.52, 13.40, model)
+///
+/// Notes
+/// -----
+/// The function releases the GIL while reading.
+#[stubgen]
+#[pyfunction(name = "load_transit_model")]
+#[pyo3(signature = (path))]
+pub fn py_load_transit_model(py: Python<'_>, path: &str) -> PyResult<PyTransitModel> {
+    py.detach(|| {
+        let model = ferrobus_core::persist::load_transit_model(path).map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to load transit model: {e}"
+            ))
+        })?;
+
+        Ok(PyTransitModel { model })
+    })
+}
+
+/// Load a cached transit model, building and caching it if it does not exist yet
+///
+/// This is the build-once workflow in a single call. The first run pays for OSM
+/// and GTFS processing and writes `cache_path`; every later run loads that file
+/// instead.
+///
+/// Parameters
+/// ----------
+/// `cache_path` : str
+///     Path of the cache file to read, or to create on the first run.
+/// `osm_path` : str
+///     Path to OpenStreetMap PBF file containing street network data.
+/// `gtfs_dirs` : list[str]
+///     List of paths to directories containing GTFS data.
+/// date : datetime.date, optional
+///     Filter transit schedules to services running on this date.
+///     If None, includes all services.
+/// `max_transfer_time` : int, default=1200
+///     Maximum walking time in seconds allowed for transfers between stops.
+///
+/// Returns
+/// -------
+/// `TransitModel`
+///     An integrated model for multimodal routing operations.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the cache exists but cannot be read, or if building the model fails.
+///
+/// Example
+/// -------
+/// .. code-block:: python
+///
+///     model = ferrobus.load_or_create_transit_model(
+///         cache_path="city.ferrobus",
+///         osm_path="city.osm.pbf",
+///         gtfs_dirs=["gtfs"],
+///         date=datetime.date.today(),
+///     )
+///
+/// Notes
+/// -----
+/// The cache is keyed only by path — ferrobus cannot tell whether the other
+/// arguments still describe the cached model. Use a separate cache path per
+/// configuration, or delete the file when the source data changes.
+///
+/// A cache written by a different ferrobus version is rebuilt rather than reused.
+#[stubgen]
+#[pyfunction(name = "load_or_create_transit_model")]
+#[pyo3(signature = (cache_path, osm_path, gtfs_dirs, date, max_transfer_time = 1200))]
+pub fn py_load_or_create_transit_model(
+    py: Python<'_>,
+    cache_path: &str,
+    osm_path: &str,
+    gtfs_dirs: Vec<String>,
+    date: Option<chrono::NaiveDate>,
+    max_transfer_time: u32,
+) -> PyResult<PyTransitModel> {
+    py.detach(|| {
+        let config = TransitModelConfig {
+            osm_path: std::path::PathBuf::from(osm_path),
+            gtfs_dirs: gtfs_dirs
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
+            date,
+            max_transfer_time,
+        };
+
+        let model = ferrobus_core::persist::load_or_create_transit_model(&config, cache_path)
+            .map_err(|e| {
+                PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                    "Failed to load or create transit model: {e}"
+                ))
+            })?;
+
+        Ok(PyTransitModel { model })
+    })
+}

@@ -8,6 +8,7 @@ This module provides algorithms for multimodal transit routing, isochrone genera
 - **Generate isochrones** to visualize travel-time polygons (:func:`calculate_isochrone`).
 - **Calculate travel-time matrices** for multiple points (:func:`travel_time_matrix`).
 - **Perform time-range routing** to find journeys across a range of departure times (:func:`range_multimodal_routing`).
+- **Persist a prebuilt model** so it is built once and reloaded thereafter (:func:`save_transit_model`, :func:`load_transit_model`).
 
 The module also defines several classes, including:
 
@@ -45,6 +46,46 @@ Examples
 
    print(f"Travel time: {route['travel_time_seconds'] / 60:.1f} minutes")
    print(f"Number of transfers: {route['transfers']}")
+
+Reusing a prebuilt model
+------------------------
+
+Building a model parses the OSM extract and every GTFS feed, then computes
+transfers between nearby stops. The result is deterministic, so there is no
+reason to pay that cost more than once. Save the model to disk and reload it:
+
+.. code-block:: python
+
+   from ferrobus import save_transit_model, load_transit_model
+
+   # Once, in a preparation step
+   model = create_transit_model(
+       osm_path="path/to/roads.osm.pbf",
+       gtfs_dirs=["path/to/gtfs"],
+       date=None,
+   )
+   save_transit_model(model, "city.ferrobus")
+
+   # In every later run, or in every worker process
+   model = load_transit_model("city.ferrobus")
+
+The saved file is self-contained: reloading it needs neither the OSM extract nor
+the GTFS feeds. :func:`load_or_create_transit_model` combines both steps, building
+and caching the model on the first call and loading it afterwards.
+
+An :class:`IsochroneIndex` can be persisted the same way with
+:func:`save_isochrone_index` and :func:`load_isochrone_index`, which matters more
+than the model itself for isochrone work: building the index runs a search for
+every grid cell in the area.
+
+.. warning::
+
+   The file format is tied to the ferrobus version that wrote it and is not a
+   stable interchange format. Loading rejects a file written by a different
+   version rather than misreading it, so rebuild after upgrading ferrobus.
+
+   An isochrone index stores street network node indices, so it is only valid
+   with the model it was built against. Save and reload the two together.
 
 API Reference
 -------------
@@ -86,6 +127,19 @@ Utility Functions
     ferrobus.create_transit_model
     ferrobus.create_transit_point
     ferrobus.create_isochrone_index
+
+Persistence Functions
+^^^^^^^^^^^^^^^^^^^^^
+
+.. autosummary::
+    :toctree: generated
+    :nosignatures:
+
+    ferrobus.save_transit_model
+    ferrobus.load_transit_model
+    ferrobus.load_or_create_transit_model
+    ferrobus.save_isochrone_index
+    ferrobus.load_isochrone_index
 
 Classes
 -------

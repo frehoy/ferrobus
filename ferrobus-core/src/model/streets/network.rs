@@ -3,6 +3,7 @@
 use geo::{Distance, Haversine, Point};
 use petgraph::graph::{EdgeReference, NodeIndex, UnGraph};
 use rstar::{RTree, primitives::GeomWithData};
+use serde::{Deserialize, Serialize};
 
 use super::components::{StreetEdge, StreetNode};
 use crate::WALKING_SPEED;
@@ -11,7 +12,7 @@ use crate::WALKING_SPEED;
 pub type IndexedPoint = GeomWithData<Point<f64>, NodeIndex>;
 
 /// Pedestrian network model based on OSM data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreetGraph {
     /// Street graph
     pub graph: UnGraph<StreetNode, StreetEdge>,

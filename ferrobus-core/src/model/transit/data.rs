@@ -8,10 +8,11 @@ use crate::{
 };
 use hashbrown::HashMap;
 use petgraph::graph::NodeIndex;
+use serde::{Deserialize, Serialize};
 
 /// Main public transit data structure
 /// based on original microsoft paper
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicTransitData {
     /// All routes
     pub routes: Vec<Route>,

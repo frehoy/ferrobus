@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::de::{deserialize_gtfs_date, deserialize_gtfs_time};
 
@@ -119,7 +119,7 @@ pub struct FeedCalendarDates {
     pub exception_type: u8,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 #[allow(clippy::struct_field_names)]
 pub struct FeedInfo {
@@ -133,7 +133,7 @@ pub struct FeedInfo {
     pub feed_version: String,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct FeedTransfer {
     pub from_stop_id: String,
