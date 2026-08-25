@@ -15,6 +15,7 @@ Core routing functionality is based on the RAPTOR (Round-based Public Transit Op
 
 - **Multimodal Routing**: Find optimal paths combining walking and public transit
 - **Isochrones**: Fast and uncertainty-aware
+- **Persistent Models**: Build the graph once, save it, and reload it in later runs
 - **Travel Time Matrices**: Compute travel times between multiple origin-destination pairs
 - **Batch Processing**: Efficient native multithreading
 - **Time-Range Routing**: Find journeys across a range of departure times with rRAPTOR
@@ -85,6 +86,39 @@ print(f"Number of transfers: {route['transfers']}")
 ```
 
 ## Advanced Features
+
+### Reusing a Prebuilt Model
+
+Building a model parses the OSM extract and every GTFS feed, then computes transfers between nearby stops. That work is deterministic, so it only needs to happen once — save the result and reload it in later runs:
+
+```python
+# Once, in a preparation step
+model = ferrobus.create_transit_model(
+    osm_path="path/to/city.osm.pbf",
+    gtfs_dirs=["path/to/gtfs_data"],
+    date=datetime.date.today(),
+)
+ferrobus.save_transit_model(model, "city.ferrobus")
+
+# In every later run, or in every worker process
+model = ferrobus.load_transit_model("city.ferrobus")
+```
+
+The saved file is self-contained — reloading it needs neither the OSM extract nor the GTFS feeds. `ferrobus.load_or_create_transit_model` does both steps in one call, building and caching the model the first time and loading it afterwards.
+
+An isochrone index can be persisted the same way with `save_isochrone_index` and `load_isochrone_index`. For isochrone work this matters more than the model itself, since building the index runs a search for every grid cell in the area:
+
+```python
+index = ferrobus.create_isochrone_index(model, area_wkt, 9)
+ferrobus.save_isochrone_index(index, "city_r9.ferrobus")
+
+# Later — pair it with the same model it was built against
+model = ferrobus.load_transit_model("city.ferrobus")
+index = ferrobus.load_isochrone_index("city_r9.ferrobus")
+```
+
+> [!NOTE]
+> The file format is tied to the ferrobus version that wrote it and is not a stable interchange format. Loading rejects a file written by a different version rather than misreading it, so rebuild the files after upgrading ferrobus.
 
 ### Detailed Journey Visualization
 

@@ -62,4 +62,35 @@ Here's a simple example to get you started:
    print(f"Travel time: {route['travel_time_seconds'] / 60:.1f} minutes")
     print(f"Number of transfers: {route['transfers']}")
 
+Building the Model Once
+-----------------------
+
+Creating the model parses the OSM extract and the GTFS feeds, which dominates the
+cost of a short script. If you run more than once, build it once and save it:
+
+.. code-block:: python
+
+   # Once, in a preparation step
+   model = ferrobus.create_transit_model(
+       osm_path="path/to/city.osm.pbf",
+       gtfs_dirs=["path/to/gtfs_data"],
+       date=datetime.date.today(),
+   )
+   ferrobus.save_transit_model(model, "city.ferrobus")
+
+   # In every later run
+   model = ferrobus.load_transit_model("city.ferrobus")
+
+Or let ferrobus handle both sides for you — this builds and caches the model on
+the first call, and loads the cache on every call after that:
+
+.. code-block:: python
+
+   model = ferrobus.load_or_create_transit_model(
+       cache_path="city.ferrobus",
+       osm_path="path/to/city.osm.pbf",
+       gtfs_dirs=["path/to/gtfs_data"],
+       date=datetime.date.today(),
+   )
+
 For detailed examples, see the :doc:`demo` notebook and the :doc:`ferrobus` API documentation.

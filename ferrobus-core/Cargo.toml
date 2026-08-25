@@ -11,13 +11,16 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json.workspace = true
 csv = "1"
+postcard = { version = "1.1", default-features = false, features = [
+    "use-std",
+] }
 chrono.workspace = true
-rstar = "0.12"
+rstar = { version = "0.12", features = ["serde"] }
 rustworkx-core = "0.17"
-petgraph = "0.8"
-hashbrown = "0.16.0"
+petgraph = { version = "0.8", features = ["serde-1"] }
+hashbrown = { version = "0.16.0", features = ["serde"] }
 fixedbitset = "0.5"
-h3o = { version = "0.9.0", features = ["geo"] }
+h3o = { version = "0.9.0", features = ["geo", "serde"] }
 #osm4routing = { git = "https://github.com/rust-transit/osm4routing2.git" }
 osm4routing = { git = "https://github.com/chingiztob/osm4routing2.git", branch = "switch_to_osmpbf" }
 geo.workspace = true

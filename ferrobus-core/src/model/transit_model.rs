@@ -7,18 +7,19 @@ use crate::model::streets::IndexedPoint;
 use crate::{Error, RaptorStopId, Time, routing::dijkstra::dijkstra_path_weights};
 use crate::{model::streets::StreetGraph, model::transit::data::PublicTransitData};
 use rstar::RTree;
+use serde::{Deserialize, Serialize};
 
 use super::Stop;
 
 /// Unified transport network model containing data about public transit and street network
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransitModel {
     pub transit_data: PublicTransitData,
     pub street_graph: StreetGraph,
     pub meta: TransitModelMeta,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TransitModelMeta {
     pub max_transfer_time: Time,
 }
@@ -187,7 +188,7 @@ impl TransitModel {
 }
 
 /// A point connected to the transit network with pre-calculated nearest stops
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransitPoint {
     /// Point coordinates
     pub geometry: Point<f64>,
