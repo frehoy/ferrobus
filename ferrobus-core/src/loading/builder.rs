@@ -44,7 +44,7 @@ pub fn create_transit_model(config: &TransitModelConfig) -> Result<TransitModel,
     calculate_transfers(&mut graph);
     info!(
         "Calculated {} transfers between stops",
-        &graph.transit_data.transfers.len()
+        graph.transit_data.transfers.len()
     );
 
     match crate::model::audit_transit_model(&graph) {

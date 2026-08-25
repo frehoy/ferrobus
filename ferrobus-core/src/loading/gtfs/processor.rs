@@ -404,8 +404,7 @@ fn process_trip_stop_times<'a>(
     let mut trips_vec = Vec::new();
 
     let mut sorted_routes: Vec<(&str, Vec<&[FeedStopTime]>)> = routes_map.into_iter().collect();
-    sorted_routes
-        .sort_by(|(left_route_id, _), (right_route_id, _)| left_route_id.cmp(right_route_id));
+    sorted_routes.sort_by_key(|(route_id, _)| *route_id);
 
     for (route_id, trips_data) in sorted_routes {
         let mut builder = RouteBuilder {
