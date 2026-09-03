@@ -50,6 +50,9 @@ const MAGIC: &[u8; 8] = b"FERROBUS";
 /// are rejected instead of being silently misread.
 const FORMAT_VERSION: u16 = 2;
 
+/// Scratch for streaming decode: enough for the longest `String`, but a borrowed field would consume it cumulatively.
+const SCRATCH_LEN: usize = 1 << 20;
+
 /// Which kind of artifact a file holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArtifactKind {
@@ -162,11 +165,12 @@ fn read_artifact<T: DeserializeOwned>(kind: ArtifactKind, path: &Path) -> Result
         )));
     }
 
-    // postcard decodes from a slice, so the payload is read in one go.
-    let mut payload = Vec::new();
-    reader.read_to_end(&mut payload)?;
+    // Only has to fit the longest string: postcard copies owned values out.
+    let mut scratch = vec![0u8; SCRATCH_LEN];
+    let (value, _) =
+        postcard::from_io((reader, scratch.as_mut_slice())).map_err(|e| encoding_error(&e))?;
 
-    postcard::from_bytes(&payload).map_err(|e| encoding_error(&e))
+    Ok(value)
 }
 
 /// Writes a prebuilt transit model to `path`.
