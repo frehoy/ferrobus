@@ -216,7 +216,8 @@ fn test_load_missing_file_is_io_error() {
 fn test_isochrone_index_build_is_reproducible() {
     let model = create_transit_model(&test_config()).expect("Failed to create test model");
 
-    let first = IsochroneIndex::new(&model, &test_area(), 9, 1200).expect("Index should be created");
+    let first =
+        IsochroneIndex::new(&model, &test_area(), 9, 1200).expect("Index should be created");
     let second =
         IsochroneIndex::new(&model, &test_area(), 9, 1200).expect("Index should be created");
 
