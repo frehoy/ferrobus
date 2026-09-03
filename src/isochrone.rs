@@ -92,6 +92,26 @@ impl PyIsochroneIndex {
         self.inner.len()
     }
 
+    /// Every H3 cell in the index
+    ///
+    /// The denominator to `reachable_cells`: what the index covers, against
+    /// what a given query reached. Cells that failed to snap to the network are
+    /// not in here, so this is the ground the index can actually speak for
+    /// rather than the area it was asked to tile.
+    ///
+    /// Returns
+    /// -------
+    /// list[str]
+    ///     H3 cell indices in their canonical hexadecimal form.
+    #[must_use]
+    pub fn cells(&self) -> Vec<String> {
+        self.inner
+            .grid
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect()
+    }
+
     /// Check if the isochrone index is empty
     ///
     /// Determines whether the isochrone index contains any cells.
@@ -257,6 +277,78 @@ pub fn calculate_isochrone(
         })?;
 
         Ok(isochrone.to_wkt().to_string())
+    })
+}
+
+/// Return the H3 cells an isochrone reaches, rather than a dissolved polygon
+///
+/// `calculate_isochrone` answers with a polygon, which is what a map wants. The
+/// dissolve is lossy: the polygon no longer knows which cells it came from, and
+/// its edge is hexagonal at the index resolution rather than following the
+/// network. Anything reasoning per cell -- accessibility weighted by what is in
+/// each cell, joining to other H3-keyed data, or comparing two isochrones
+/// exactly -- wants the cells.
+///
+/// Parameters
+/// ----------
+/// `transit_model` : `TransitModel`
+///     The transit model to use for routing.
+/// `start_point` : `TransitPoint`
+///     Starting location for the isochrone.
+/// `departure_time` : int
+///     Time of departure in seconds since midnight.
+/// `max_transfers` : int
+///     Maximum number of transfers allowed in route planning.
+/// cutoff : int
+///     Maximum travel time in seconds to include.
+/// index : `IsochroneIndex`
+///     Pre-computed isochrone spatial index for the area.
+///
+/// Returns
+/// -------
+/// list[str]
+///     H3 cell indices in their canonical hexadecimal form, as ``h3-py`` reads
+///     them. Unordered. A subset of :meth:`IsochroneIndex.cells`.
+///
+/// Raises
+/// ------
+/// `RuntimeError`
+///     If the routing fails.
+///
+/// Examples
+/// --------
+/// .. code-block:: python
+///
+///     cells = ferrobus.reachable_cells(model, point, 28800, 3, 1800, index)
+///     reachable = sum(population[c] for c in cells if c in population)
+#[pyfunction]
+#[stubgen]
+#[pyo3(signature = (transit_model, start_point, departure_time, max_transfers, cutoff, index))]
+pub fn reachable_cells(
+    py: Python<'_>,
+    transit_model: &PyTransitModel,
+    start_point: &PyTransitPoint,
+    departure_time: Time,
+    max_transfers: usize,
+    cutoff: Time,
+    index: &PyIsochroneIndex,
+) -> PyResult<Vec<String>> {
+    py.detach(|| {
+        let cells = ferrobus_core::algo::reachable_cells(
+            &transit_model.model,
+            &start_point.inner,
+            departure_time,
+            max_transfers,
+            cutoff,
+            &index.inner,
+        )
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Failed to compute reachable cells: {e}"
+            ))
+        })?;
+
+        Ok(cells.into_iter().map(|cell| cell.to_string()).collect())
     })
 }
 

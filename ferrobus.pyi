@@ -24,6 +24,7 @@ __all__ = [
     "parallel_detailed_journeys",
     "pareto_range_multimodal_routing",
     "range_multimodal_routing",
+    "reachable_cells",
     "save_isochrone_index",
     "save_transit_model",
     "travel_time_matrix",
@@ -84,6 +85,20 @@ class IsochroneIndex:
         -------
         int
             The number of cells in the index.
+        """
+    def cells(self) -> builtins.list[builtins.str]:
+        r"""
+        Every H3 cell in the index
+
+        The denominator to `reachable_cells`: what the index covers, against
+        what a given query reached. Cells that failed to snap to the network are
+        not in here, so this is the ground the index can actually speak for
+        rather than the area it was asked to tile.
+
+        Returns
+        -------
+        list[str]
+            H3 cell indices in their canonical hexadecimal form.
         """
     def is_empty(self) -> builtins.bool:
         r"""
@@ -367,6 +382,27 @@ def create_isochrone_index(transit_model: TransitModel, area: builtins.str, cell
     Creating this index may be compute-intensive but allows for extremely fast
     subsequent isochrone calculations, making it ideal for interactive applications
     or batch processing multiple isochrones from different starting points.
+
+    Cell count grows about sevenfold per resolution step, and the index costs
+    roughly 40 bytes of memory and 20 bytes on disk per cell that snaps to the
+    network. Tiling the whole of Sweden gives a sense of the scale:
+
+    ==========  ==========  ==========  ========
+    Resolution  Cells       Build time  On disk
+    ==========  ==========  ==========  ========
+    7              113 000         2 s     2 MB
+    8              792 000         5 s    16 MB
+    9            5 540 000        33 s   109 MB
+    10          38 800 000       167 s   757 MB
+    ==========  ==========  ==========  ========
+
+    Resolution 9 (cells roughly 175 m across) is a reasonable default for
+    transit isochrones; finer resolutions mostly add cells inside areas the
+    network already covers uniformly.
+
+    Build the index once and persist it with :func:`save_isochrone_index`.
+    Reloading is far cheaper than rebuilding, and index construction is
+    reproducible, so a cached file and a fresh build agree cell for cell.
     """
 
 def create_transit_model(osm_path: builtins.str, gtfs_dirs: typing.Sequence[builtins.str], date: typing.Optional[datetime.date], max_transfer_time: builtins.int = 1200) -> TransitModel:
@@ -808,6 +844,51 @@ def parallel_detailed_journeys(transit_model: TransitModel, start_point: Transit
 def pareto_range_multimodal_routing(transit_model: TransitModel, start_point: TransitPoint, end_point: TransitPoint, departure_range: tuple[builtins.int, builtins.int], max_transfers: builtins.int = 3) -> RangeRoutingResult: ...
 
 def range_multimodal_routing(transit_model: TransitModel, start_point: TransitPoint, end_point: TransitPoint, departure_range: tuple[builtins.int, builtins.int], max_transfers: builtins.int = 3) -> RangeRoutingResult: ...
+
+def reachable_cells(transit_model: TransitModel, start_point: TransitPoint, departure_time: builtins.int, max_transfers: builtins.int, cutoff: builtins.int, index: IsochroneIndex) -> builtins.list[builtins.str]:
+    r"""
+    Return the H3 cells an isochrone reaches, rather than a dissolved polygon
+
+    `calculate_isochrone` answers with a polygon, which is what a map wants. The
+    dissolve is lossy: the polygon no longer knows which cells it came from, and
+    its edge is hexagonal at the index resolution rather than following the
+    network. Anything reasoning per cell -- accessibility weighted by what is in
+    each cell, joining to other H3-keyed data, or comparing two isochrones
+    exactly -- wants the cells.
+
+    Parameters
+    ----------
+    `transit_model` : `TransitModel`
+        The transit model to use for routing.
+    `start_point` : `TransitPoint`
+        Starting location for the isochrone.
+    `departure_time` : int
+        Time of departure in seconds since midnight.
+    `max_transfers` : int
+        Maximum number of transfers allowed in route planning.
+    cutoff : int
+        Maximum travel time in seconds to include.
+    index : `IsochroneIndex`
+        Pre-computed isochrone spatial index for the area.
+
+    Returns
+    -------
+    list[str]
+        H3 cell indices in their canonical hexadecimal form, as ``h3-py`` reads
+        them. Unordered. A subset of :meth:`IsochroneIndex.cells`.
+
+    Raises
+    ------
+    `RuntimeError`
+        If the routing fails.
+
+    Examples
+    --------
+    .. code-block:: python
+
+        cells = ferrobus.reachable_cells(model, point, 28800, 3, 1800, index)
+        reachable = sum(population[c] for c in cells if c in population)
+    """
 
 def save_isochrone_index(index: IsochroneIndex, path: builtins.str) -> None:
     r"""
