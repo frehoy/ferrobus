@@ -212,3 +212,62 @@ def test_detailed_journey(model):
             "leg_type": "egress_walk",
             "to_name": "",
         }
+
+
+def test_reachable_cells(model):
+    lat, lon = 56.25788847445582, 93.53960625054688
+    point = ferrobus.create_transit_point(lat, lon, model)
+    area_wkt = "POLYGON ((93.57274857628481 56.18357044999381, 93.57274857628481 56.30437667924404, 93.39795011002934 56.30437667924404, 93.39795011002934 56.18357044999381, 93.57274857628481 56.18357044999381))"  # noqa: E501
+    index = ferrobus.create_isochrone_index(
+        transit_model=model, area=area_wkt, cell_resolution=8
+    )
+
+    def reached(cutoff):
+        return set(
+            ferrobus.reachable_cells(
+                transit_model=model,
+                start_point=point,
+                departure_time=43200,
+                max_transfers=2,
+                cutoff=cutoff,
+                index=index,
+            )
+        )
+
+    near, far = reached(900), reached(2700)
+    grid = set(index.cells())
+
+    assert near, "a 15 minute cutoff should reach something"
+    # H3 indices are 15 hex characters at resolution 8.
+    assert all(len(c) == 15 and int(c, 16) for c in near)
+
+    # Only cells the index holds, and more time cannot reach less ground.
+    assert near <= grid
+    assert far <= grid
+    assert near < far, "the cutoff made no difference"
+    assert far < grid, "a 45 minute cutoff reached the whole index"
+
+
+def test_reachable_cells_are_readable_by_h3(model):
+    """The reason these are strings: h3-py should take them without conversion."""
+    h3 = pytest.importorskip("h3")
+
+    lat, lon = 56.25788847445582, 93.53960625054688
+    point = ferrobus.create_transit_point(lat, lon, model)
+    area_wkt = "POLYGON ((93.57274857628481 56.18357044999381, 93.57274857628481 56.30437667924404, 93.39795011002934 56.30437667924404, 93.39795011002934 56.18357044999381, 93.57274857628481 56.18357044999381))"  # noqa: E501
+    index = ferrobus.create_isochrone_index(
+        transit_model=model, area=area_wkt, cell_resolution=8
+    )
+
+    cells = ferrobus.reachable_cells(
+        transit_model=model,
+        start_point=point,
+        departure_time=43200,
+        max_transfers=2,
+        cutoff=1800,
+        index=index,
+    )
+
+    assert cells
+    assert all(h3.is_valid_cell(cell) for cell in cells)
+    assert {h3.get_resolution(cell) for cell in cells} == {8}
