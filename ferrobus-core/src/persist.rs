@@ -48,7 +48,7 @@ const MAGIC: &[u8; 8] = b"FERROBUS";
 ///
 /// Bump this whenever a persisted structure changes shape, so that older files
 /// are rejected instead of being silently misread.
-const FORMAT_VERSION: u16 = 1;
+const FORMAT_VERSION: u16 = 2;
 
 /// Which kind of artifact a file holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
