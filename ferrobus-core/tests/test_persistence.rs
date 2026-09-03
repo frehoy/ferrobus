@@ -236,3 +236,25 @@ fn test_isochrone_index_build_is_reproducible() {
 
     assert_eq!(first_bytes, second_bytes);
 }
+
+/// Two builds from the same source data must produce the same file.
+#[test]
+fn test_transit_model_build_is_reproducible() {
+    let first_path = temp_path("reproducible_model_first");
+    let second_path = temp_path("reproducible_model_second");
+
+    for path in [&first_path, &second_path] {
+        let model = create_transit_model(&test_config()).expect("Failed to create test model");
+        save_transit_model(&model, path).expect("Model should be saved");
+    }
+
+    let first = std::fs::read(&first_path).expect("Model should be readable");
+    let second = std::fs::read(&second_path).expect("Model should be readable");
+    std::fs::remove_file(&first_path).ok();
+    std::fs::remove_file(&second_path).ok();
+
+    assert_eq!(
+        first, second,
+        "two builds from identical inputs produced different files"
+    );
+}
