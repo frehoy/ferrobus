@@ -16,13 +16,11 @@ postcard = { version = "1.1", default-features = false, features = [
 ] }
 chrono.workspace = true
 rstar = { version = "0.12", features = ["serde"] }
-rustworkx-core = "0.17"
 petgraph = { version = "0.8", features = ["serde-1"] }
 hashbrown = { version = "0.16.0", features = ["serde"] }
 fixedbitset = "0.5"
 h3o = { version = "0.9.0", features = ["geo", "serde"] }
-#osm4routing = { git = "https://github.com/rust-transit/osm4routing2.git" }
-osm4routing = { git = "https://github.com/chingiztob/osm4routing2.git", branch = "switch_to_osmpbf" }
+osm4routing = { git = "https://github.com/frehoy/osm4routing2.git", rev = "9952de86396571f338d77d967edd0ab3cd6bf213" }
 geo.workspace = true
 geojson.workspace = true
 rayon.workspace = true
@@ -33,6 +31,10 @@ libc = "0.2"
 [dev-dependencies]
 criterion = "0.8"
 dotenvy = "0.15"
+libc = "0.2"
+wkt = "0.14.0"
+# Reading raw OSM tags, for the memprobe example only.
+osmpbf = "0.3"
 
 [[bench]]
 name = "bench_main"

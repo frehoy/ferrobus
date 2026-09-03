@@ -4,8 +4,9 @@ use hashbrown::HashSet;
 use log::info;
 use osm4routing::FootAccessibility;
 use petgraph::graph::{NodeIndex, UnGraph};
+use petgraph::unionfind::UnionFind;
+use petgraph::visit::EdgeRef;
 use rstar::RTree;
-use rustworkx_core::connectivity::connected_components;
 use std::path::Path;
 
 use crate::{
@@ -13,39 +14,45 @@ use crate::{
     model::{IndexedPoint, StreetEdge, StreetGraph, StreetNode},
 };
 
-fn rebuild_largest_component_graph(
-    graph: &UnGraph<StreetNode, StreetEdge>,
-    largest_component: &[NodeIndex],
-) -> UnGraph<StreetNode, StreetEdge> {
-    let mut new_graph = UnGraph::<StreetNode, StreetEdge>::new_undirected();
-    let mut new_node_indices = HashMap::new();
+/// Discard everything outside the largest connected component, in place.
+fn keep_largest_component(graph: &mut UnGraph<StreetNode, StreetEdge>) -> Result<(), Error> {
+    let node_count = graph.node_count();
 
-    for node_index in largest_component {
-        let node = graph[*node_index].clone();
-        let new_node_index = new_graph.add_node(node);
-        new_node_indices.insert(*node_index, new_node_index);
+    let mut components = UnionFind::<u32>::new(node_count);
+    for edge in graph.edge_references() {
+        let (source, target) = (edge.source().index(), edge.target().index());
+        // The graph is built from `NodeIndex<u32>`, so both fit by construction.
+        #[allow(clippy::cast_possible_truncation)]
+        components.union(source as u32, target as u32);
     }
 
-    for node_index in largest_component {
-        for neighbor in graph.neighbors(*node_index) {
-            if node_index.index() >= neighbor.index() {
-                continue;
-            }
+    // Labels are representative node indices, so they index a plain counter.
+    let labels = components.into_labeling();
+    let mut sizes = vec![0u32; node_count];
+    for &label in &labels {
+        sizes[label as usize] += 1;
+    }
 
-            let edge = graph
-                .find_edge(*node_index, neighbor)
-                .expect("edge must exist for neighbor");
-            let edge_type = graph[edge].clone();
+    let largest = sizes
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, count)| count)
+        .filter(|&(_, &count)| count > 0)
+        .map(|(label, _)| label)
+        .ok_or_else(|| Error::InvalidData("No connected components found".to_string()))?;
+    drop(sizes);
 
-            new_graph.add_edge(
-                new_node_indices[node_index],
-                new_node_indices[&neighbor],
-                edge_type,
-            );
+    // High to low: `remove_node` swaps the last node into the hole, and every
+    // index above this one has already been decided, so `labels[index]` still
+    // describes the node under `index`.
+    for index in (0..node_count).rev() {
+        if labels[index] as usize != largest {
+            graph.remove_node(NodeIndex::new(index));
         }
     }
+    graph.shrink_to_fit();
 
-    new_graph
+    Ok(())
 }
 
 /// Create the street network graph based on an OSM .pbf file
@@ -54,20 +61,25 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
 
     let mut graph = UnGraph::<StreetNode, StreetEdge>::new_undirected();
     // Store OSM node IDs and their corresponding graph node indices
+    // No tag filter here: osm4routing already drops what it cannot walk.
     let (nodes, edges) = osm4routing::Reader::new()
         .read(filename)
         .map_err(|e| Error::InvalidData(format!("Error reading OSM data: {e}")))?;
+    info!("OSM read: {} nodes, {} ways", nodes.len(), edges.len());
 
-    // filter only pedestrian allowed ways and edges with Unknown pedestrian accessibility
-    let edges = edges
+    // Only a way's length is read, so the fat `Edge` values are dropped here.
+    let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
         .into_iter()
-        .filter(|edge| {
-            matches!(
-                edge.properties.foot,
-                FootAccessibility::Allowed | FootAccessibility::Unknown
-            )
+        .filter(|edge| edge.properties.foot == FootAccessibility::Allowed)
+        // A way whose ends are the same node is a loop nothing can route over.
+        .filter(|edge| edge.source != edge.target)
+        .map(|edge| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let weight = (edge.length() / WALKING_SPEED) as Time;
+            (edge.source, edge.target, weight)
         })
-        .collect::<Vec<_>>();
+        .collect();
+    info!("Kept {} pedestrian ways", edges.len());
 
     let mut node_indices = HashMap::new();
 
@@ -82,44 +94,41 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         });
     }
 
-    for edge in edges {
+    info!("Indexed {} distinct OSM nodes", node_indices.len());
+
+    for (source, target, weight) in edges {
         let source_index = *node_indices
-            .get(&edge.source)
-            .ok_or_else(|| Error::InvalidData(format!("Missing source node: {:?}", edge.source)))?;
+            .get(&source)
+            .ok_or_else(|| Error::InvalidData(format!("Missing source node: {source:?}")))?;
         let target_index = *node_indices
-            .get(&edge.target)
-            .ok_or_else(|| Error::InvalidData(format!("Missing target node: {:?}", edge.target)))?;
+            .get(&target)
+            .ok_or_else(|| Error::InvalidData(format!("Missing target node: {target:?}")))?;
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let weight = (edge.length() / WALKING_SPEED) as Time;
-
-        let edge_obj = StreetEdge { weight };
-
-        graph.add_edge(source_index, target_index, edge_obj);
+        graph.add_edge(source_index, target_index, StreetEdge { weight });
     }
+
+    // One entry per OSM node, and nothing below reads it.
+    drop(node_indices);
+    info!(
+        "Graph assembled: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     // Keep only the largest connected component to avoid isolated parts of the graph
     // affecting routing
-    #[allow(clippy::redundant_closure_for_method_calls)]
-    let largest_component = connected_components(&graph)
-        .into_iter()
-        .max_by_key(|c| c.len())
-        .ok_or(Error::InvalidData(
-            "No connected components found".to_string(),
-        ))?;
-    let largest_component: Vec<NodeIndex> = largest_component.into_iter().collect();
-
-    // Create a new graph for the largest connected component
-    let new_graph = rebuild_largest_component_graph(&graph, &largest_component);
-    drop(graph);
+    info!("Pruning to the largest connected component");
+    keep_largest_component(&mut graph)?;
+    info!(
+        "Street network pruned to {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     info!("Building R-Tree spatial index");
-    let rtree = build_rtree(&new_graph);
+    let rtree = build_rtree(&graph);
 
-    let street_network = StreetGraph {
-        graph: new_graph,
-        rtree,
-    };
+    let street_network = StreetGraph { graph, rtree };
 
     Ok(street_network)
 }
@@ -141,39 +150,28 @@ mod tests {
     use osm4routing::NodeId;
 
     #[test]
-    fn rebuild_largest_component_does_not_duplicate_undirected_edges() {
+    fn keeps_the_largest_component_and_drops_the_rest() {
+        let node = |id, x: f64| StreetNode {
+            id: NodeId(id),
+            geometry: Point::new(x, 0.0),
+        };
         let mut graph = UnGraph::<StreetNode, StreetEdge>::new_undirected();
-        let n0 = graph.add_node(StreetNode {
-            id: NodeId(1),
-            geometry: Point::new(0.0, 0.0),
-        });
-        let n1 = graph.add_node(StreetNode {
-            id: NodeId(2),
-            geometry: Point::new(1.0, 0.0),
-        });
-        let n2 = graph.add_node(StreetNode {
-            id: NodeId(3),
-            geometry: Point::new(2.0, 0.0),
-        });
-
+        // A three-node path, plus an unrelated pair that must not survive.
+        let n0 = graph.add_node(node(1, 0.0));
+        let n1 = graph.add_node(node(2, 1.0));
+        let n2 = graph.add_node(node(3, 2.0));
+        let n3 = graph.add_node(node(4, 10.0));
+        let n4 = graph.add_node(node(5, 11.0));
         graph.add_edge(n0, n1, StreetEdge { weight: 10 });
         graph.add_edge(n1, n2, StreetEdge { weight: 20 });
+        graph.add_edge(n3, n4, StreetEdge { weight: 30 });
 
-        let rebuilt = rebuild_largest_component_graph(&graph, &[n0, n1, n2]);
-        assert_eq!(rebuilt.edge_count(), 2);
+        keep_largest_component(&mut graph).expect("a graph with edges has a component");
 
-        let unique_pairs: HashSet<(usize, usize)> = rebuilt
-            .edge_indices()
-            .map(|edge_idx| {
-                let (a, b) = rebuilt
-                    .edge_endpoints(edge_idx)
-                    .expect("edge endpoints must exist");
-                let a = a.index();
-                let b = b.index();
-                if a < b { (a, b) } else { (b, a) }
-            })
-            .collect();
-
-        assert_eq!(unique_pairs.len(), rebuilt.edge_count());
+        assert_eq!(graph.node_count(), 3);
+        // Pruning in place must not shed or double the surviving edges.
+        assert_eq!(graph.edge_count(), 2);
+        let kept: HashSet<i64> = graph.node_weights().map(|n| n.id.0).collect();
+        assert_eq!(kept, HashSet::from([1, 2, 3]));
     }
 }

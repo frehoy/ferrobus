@@ -1,0 +1,5 @@
+# The image needs the source, not the datasets or a macOS build tree.
+data/
+target/
+.git/
+docs/

@@ -210,3 +210,51 @@ fn test_load_missing_file_is_io_error() {
     let result = load_transit_model(temp_path("missing"));
     assert!(matches!(result, Err(Error::IoError(_))));
 }
+
+/// A persisted index is only worth caching if rebuilding it gives the same file.
+#[test]
+fn test_isochrone_index_build_is_reproducible() {
+    let model = create_transit_model(&test_config()).expect("Failed to create test model");
+
+    let first =
+        IsochroneIndex::new(&model, &test_area(), 9, 1200).expect("Index should be created");
+    let second =
+        IsochroneIndex::new(&model, &test_area(), 9, 1200).expect("Index should be created");
+
+    assert_eq!(first.grid, second.grid);
+
+    // Compare through the serialised form, since the per-cell data is private.
+    let first_path = temp_path("reproducible_first");
+    let second_path = temp_path("reproducible_second");
+    save_isochrone_index(&first, &first_path).expect("Index should be saved");
+    save_isochrone_index(&second, &second_path).expect("Index should be saved");
+
+    let first_bytes = std::fs::read(&first_path).expect("Index should be readable");
+    let second_bytes = std::fs::read(&second_path).expect("Index should be readable");
+    std::fs::remove_file(&first_path).ok();
+    std::fs::remove_file(&second_path).ok();
+
+    assert_eq!(first_bytes, second_bytes);
+}
+
+/// Two builds from the same source data must produce the same file.
+#[test]
+fn test_transit_model_build_is_reproducible() {
+    let first_path = temp_path("reproducible_model_first");
+    let second_path = temp_path("reproducible_model_second");
+
+    for path in [&first_path, &second_path] {
+        let model = create_transit_model(&test_config()).expect("Failed to create test model");
+        save_transit_model(&model, path).expect("Model should be saved");
+    }
+
+    let first = std::fs::read(&first_path).expect("Model should be readable");
+    let second = std::fs::read(&second_path).expect("Model should be readable");
+    std::fs::remove_file(&first_path).ok();
+    std::fs::remove_file(&second_path).ok();
+
+    assert_eq!(
+        first, second,
+        "two builds from identical inputs produced different files"
+    );
+}

@@ -5,6 +5,8 @@
 
 use geo::{MultiPolygon, Point, Polygon};
 use hashbrown::HashMap;
+use log::info;
+use petgraph::graph::NodeIndex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -13,8 +15,70 @@ use h3o::{
     geom::{ContainmentMode, SolventBuilder, TilerBuilder},
 };
 
-use crate::{Error, Time, TransitModel};
+use crate::routing::multimodal_routing::RoutingTarget;
+use crate::{Error, RaptorStopId, Time, TransitModel};
 use crate::{TransitPoint, multimodal_routing_one_to_many};
+
+/// Egress stops kept per grid cell; three is what the index has always kept.
+const GRID_EGRESS_STOPS: usize = 3;
+
+/// How many candidate cells are snapped at a time while building the index.
+const SNAP_CHUNK: usize = 1 << 16;
+
+/// One grid cell's connection to the transit network: 32 bytes, heap-free.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct GridPoint {
+    /// Street network node the cell centroid snapped to.
+    node: u32,
+    /// How many entries of `stops` are populated.
+    stop_count: u8,
+    /// `(stop, walking seconds)` pairs, nearest first.
+    stops: [(u32, u32); GRID_EGRESS_STOPS],
+}
+
+impl GridPoint {
+    /// Snaps a centroid, or `None` if it is out of walking range.
+    fn snap(
+        centroid: Point<f64>,
+        transit_model: &TransitModel,
+        max_walking_time: Time,
+    ) -> Option<Self> {
+        let (node, nearest_stops) = TransitPoint::snap_destination(
+            centroid,
+            transit_model,
+            max_walking_time,
+            GRID_EGRESS_STOPS,
+        )
+        .ok()?;
+
+        let node = u32::try_from(node.index()).ok()?;
+        let mut stops = [(0, 0); GRID_EGRESS_STOPS];
+        let mut stop_count = 0u8;
+
+        for (slot, &(stop, time)) in stops.iter_mut().zip(&nearest_stops) {
+            *slot = (u32::try_from(stop).ok()?, time);
+            stop_count += 1;
+        }
+
+        Some(Self {
+            node,
+            stop_count,
+            stops,
+        })
+    }
+}
+
+impl RoutingTarget for GridPoint {
+    fn target_node(&self) -> NodeIndex {
+        NodeIndex::new(self.node as usize)
+    }
+
+    fn egress_stops(&self) -> impl Iterator<Item = (RaptorStopId, Time)> + '_ {
+        self.stops[..self.stop_count as usize]
+            .iter()
+            .map(|&(stop, time)| (stop as RaptorStopId, time))
+    }
+}
 
 /// Index for isochrone calculation covering a specific area
 /// It contains a grid of hexagonal H3 cells and their respective
@@ -22,8 +86,8 @@ use crate::{TransitPoint, multimodal_routing_one_to_many};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IsochroneIndex {
     pub grid: Vec<CellIndex>,
-    transit_points: Vec<TransitPoint>,
-    resoulution: u8,
+    points: Vec<GridPoint>,
+    resolution: u8,
 }
 
 impl IsochroneIndex {
@@ -32,19 +96,19 @@ impl IsochroneIndex {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.grid.is_empty() && self.transit_points.is_empty()
+        self.grid.is_empty() && self.points.is_empty()
     }
 
     pub fn resolution(&self) -> u8 {
-        self.resoulution
+        self.resolution
     }
 
     #[cfg(test)]
     pub(crate) fn empty_for_tests() -> Self {
         Self {
             grid: Vec::new(),
-            transit_points: Vec::new(),
-            resoulution: 9,
+            points: Vec::new(),
+            resolution: 9,
         }
     }
 }
@@ -56,46 +120,62 @@ impl IsochroneIndex {
         cell_resolution: u8,
         max_walking_time: Time,
     ) -> Result<Self, Error> {
-        let original_grid = create_hex_coverage(area.clone(), cell_resolution)?;
-        let grid_centroids = get_grid_centroids(&original_grid);
+        let resolution = Resolution::try_from(cell_resolution)
+            .map_err(|e| Error::InvalidData(format!("Got invalid H3 resolution {e}")))?;
 
-        // Create transit points and track which ones are successful
-        let snap_results: Vec<(usize, Result<TransitPoint, Error>)> = grid_centroids
-            .par_iter()
-            .enumerate()
-            .map(|(i, point)| {
-                (
-                    i,
-                    TransitPoint::new(*point, transit_model, max_walking_time, 3),
-                )
-            })
-            .collect();
+        let mut tiler = TilerBuilder::new(resolution)
+            .containment_mode(ContainmentMode::Covers)
+            .build();
+        tiler.add(area.clone())?;
 
-        // Filter to keep only successful transit points and corresponding grid cells
+        let mut coverage = tiler.into_coverage();
+        let mut candidates: Vec<CellIndex> = Vec::with_capacity(SNAP_CHUNK);
         let mut grid = Vec::new();
-        let mut snapped_centroids = Vec::new();
+        let mut points = Vec::new();
+        let mut considered = 0usize;
 
-        for (idx, result) in snap_results {
-            if let Ok(transit_point) = result {
-                grid.push(original_grid[idx]);
-                snapped_centroids.push(transit_point);
+        loop {
+            candidates.clear();
+            candidates.extend(coverage.by_ref().take(SNAP_CHUNK));
+            if candidates.is_empty() {
+                break;
+            }
+            considered += candidates.len();
+
+            let snapped: Vec<Option<GridPoint>> = candidates
+                .par_iter()
+                .map(|cell| GridPoint::snap(cell_centroid(*cell), transit_model, max_walking_time))
+                .collect();
+
+            for (cell, point) in candidates.iter().zip(snapped) {
+                if let Some(point) = point {
+                    grid.push(*cell);
+                    points.push(point);
+                }
             }
         }
 
-        println!(
-            "Snapped {} of {}",
-            snapped_centroids.len(),
-            original_grid.len()
+        grid.shrink_to_fit();
+        points.shrink_to_fit();
+
+        info!(
+            "Isochrone index at resolution {cell_resolution}: snapped {} of {considered} cells",
+            grid.len()
         );
 
         Ok(Self {
             grid,
-            transit_points: snapped_centroids,
-            resoulution: cell_resolution,
+            points,
+            resolution: cell_resolution,
         })
     }
 }
 
+/// Cells reachable within `cutoff`, as a grid rather than a dissolved polygon.
+///
+/// # Errors
+///
+/// Returns an error if the underlying routing fails.
 pub fn calculate_isochrone(
     transit_model: &TransitModel,
     start_point: &TransitPoint,
@@ -104,7 +184,7 @@ pub fn calculate_isochrone(
     cutoff: Time,
     index: &IsochroneIndex,
 ) -> Result<MultiPolygon, Error> {
-    let reached_cells = compute_reachable_cells(
+    let reached_cells = reachable_cells(
         transit_model,
         start_point,
         departure_time,
@@ -168,7 +248,7 @@ pub fn calculate_percent_access_isochrone(
     let all_reached_cells: Result<Vec<Vec<CellIndex>>, Error> = departure_times
         .par_iter()
         .map(|&departure_time| {
-            compute_reachable_cells(
+            reachable_cells(
                 transit_model,
                 start_point,
                 departure_time,
@@ -198,42 +278,30 @@ pub fn calculate_percent_access_isochrone(
     Ok(percent_access)
 }
 
-fn create_hex_coverage(area: Polygon, resolution: u8) -> Result<Vec<CellIndex>, Error> {
-    let resolution = Resolution::try_from(resolution)
-        .map_err(|e| Error::InvalidData(format!("Got invalid H3 resolution {e}")))?;
+fn cell_centroid(cell: CellIndex) -> Point<f64> {
+    let lat_lon = LatLng::from(cell);
 
-    let mut tiler = TilerBuilder::new(resolution)
-        .containment_mode(ContainmentMode::Covers)
-        .build();
-    tiler.add(area)?;
-
-    Ok(tiler.into_coverage().collect::<Vec<_>>())
+    Point::new(lat_lon.lng(), lat_lon.lat())
 }
 
-fn get_grid_centroids(grid: &[CellIndex]) -> Vec<Point<f64>> {
-    grid.iter()
-        .map(|cell| {
-            let lat_lon = LatLng::from(*cell);
-
-            Point::new(lat_lon.lng(), lat_lon.lat())
-        })
-        .collect()
-}
-
-fn compute_reachable_cells(
+/// Cells reachable within `cutoff`, as a grid rather than a dissolved polygon.
+///
+/// # Errors
+///
+/// Returns an error if the underlying routing fails.
+pub fn reachable_cells(
     transit_model: &TransitModel,
     start_point: &TransitPoint,
-    departure_time: u32,
+    departure_time: Time,
     max_transfers: usize,
-    cutoff: u32,
+    cutoff: Time,
     index: &IsochroneIndex,
 ) -> Result<Vec<CellIndex>, Error> {
-    let snapped_centroids = &index.transit_points;
     let grid = &index.grid;
     let routing_results = multimodal_routing_one_to_many(
         transit_model,
         start_point,
-        snapped_centroids,
+        &index.points,
         departure_time,
         max_transfers,
     )?;
@@ -248,4 +316,20 @@ fn compute_reachable_cells(
         })
         .collect();
     Ok(reached_cells)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GRID_EGRESS_STOPS, GridPoint};
+
+    /// A national index holds millions of these, so this has to stay small.
+    #[test]
+    fn grid_point_stays_compact() {
+        assert!(
+            size_of::<GridPoint>() <= 32,
+            "GridPoint grew to {} bytes",
+            size_of::<GridPoint>()
+        );
+        assert_eq!(GRID_EGRESS_STOPS, 3);
+    }
 }

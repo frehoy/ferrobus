@@ -71,3 +71,6 @@ docs/_build/
 
 # Pyenv
 .python-version
+
+# Local OSM/GTFS extracts and the prebuilt artifacts derived from them
+/data
