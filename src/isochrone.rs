@@ -151,6 +151,27 @@ impl PyIsochroneIndex {
 /// Creating this index may be compute-intensive but allows for extremely fast
 /// subsequent isochrone calculations, making it ideal for interactive applications
 /// or batch processing multiple isochrones from different starting points.
+///
+/// Cell count grows about sevenfold per resolution step, and the index costs
+/// roughly 40 bytes of memory and 20 bytes on disk per cell that snaps to the
+/// network. Tiling the whole of Sweden gives a sense of the scale:
+///
+/// ==========  ==========  ==========  ========
+/// Resolution  Cells       Build time  On disk
+/// ==========  ==========  ==========  ========
+/// 7              113 000         2 s     2 MB
+/// 8              792 000         5 s    16 MB
+/// 9            5 540 000        33 s   109 MB
+/// 10          38 800 000       167 s   757 MB
+/// ==========  ==========  ==========  ========
+///
+/// Resolution 9 (cells roughly 175 m across) is a reasonable default for
+/// transit isochrones; finer resolutions mostly add cells inside areas the
+/// network already covers uniformly.
+///
+/// Build the index once and persist it with :func:`save_isochrone_index`.
+/// Reloading is far cheaper than rebuilding, and index construction is
+/// reproducible, so a cached file and a fresh build agree cell for cell.
 #[stubgen]
 #[pyfunction]
 #[pyo3(signature = (transit_model, area, cell_resolution, max_walking_time=1200))]
