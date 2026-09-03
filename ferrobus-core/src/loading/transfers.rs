@@ -15,11 +15,17 @@ pub(crate) fn calculate_transfers(graph: &mut TransitModel) {
 
     // Snap all transit stops to street network nodes (Some = snapped, None = too far)
     let stop_nodes = snap_stops_to_network(graph);
+
+    // One reverse index, shared by the search and the co-located links below.
+    let stops_by_node = group_stops_by_node(&stop_nodes);
+
     // Calculate transfers for all stops that could be snapped
-    let computed_transfers = calculate_stop_transfers(graph, &stop_nodes, max_transfer_time);
+    let computed_transfers =
+        calculate_stop_transfers(graph, &stop_nodes, &stops_by_node, max_transfer_time);
+
     // Add zero-time links for stops snapped to the same node, so routing can
     // still use co-located stops.
-    let synthetic_colocated_transfers = create_colocated_stop_transfers(&stop_nodes);
+    let synthetic_colocated_transfers = create_colocated_stop_transfers(&stops_by_node);
 
     if !synthetic_colocated_transfers.is_empty() {
         let synthetic_count: usize = synthetic_colocated_transfers
@@ -178,6 +184,7 @@ fn snap_stops_to_network(graph: &TransitModel) -> Vec<Option<NodeIndex>> {
 fn calculate_stop_transfers(
     graph: &TransitModel,
     stop_nodes: &[Option<NodeIndex>],
+    stops_by_node: &HashMap<NodeIndex, Vec<RaptorStopId>>,
     max_transfer_time: Time,
 ) -> Vec<(RaptorStopId, Vec<Transfer>)> {
     (0..stop_nodes.len())
@@ -188,7 +195,7 @@ fn calculate_stop_transfers(
 
             let transfers = find_transfers_from_stop(
                 graph,
-                stop_nodes,
+                stops_by_node,
                 source_idx,
                 source_node,
                 max_transfer_time,
@@ -220,20 +227,19 @@ fn group_stops_by_node(stop_nodes: &[Option<NodeIndex>]) -> HashMap<NodeIndex, V
 /// `node_to_stop` keeps one canonical stop per node for fast lookup; these
 /// synthetic zero-cost links preserve reachability to other co-located stops.
 fn create_colocated_stop_transfers(
-    stop_nodes: &[Option<NodeIndex>],
+    stops_by_node: &HashMap<NodeIndex, Vec<RaptorStopId>>,
 ) -> Vec<(RaptorStopId, Vec<Transfer>)> {
-    let grouped = group_stops_by_node(stop_nodes);
     let mut transfers_by_stop: HashMap<RaptorStopId, Vec<Transfer>> = HashMap::new();
 
-    for stops in grouped.into_values() {
+    for stops in stops_by_node.values() {
         if stops.len() < 2 {
             continue;
         }
 
-        for &from_stop in &stops {
+        for &from_stop in stops {
             let entry = transfers_by_stop.entry(from_stop).or_default();
             entry.reserve(stops.len().saturating_sub(1));
-            for &to_stop in &stops {
+            for &to_stop in stops {
                 if to_stop != from_stop {
                     entry.push(Transfer {
                         target_stop: to_stop,
@@ -250,7 +256,7 @@ fn create_colocated_stop_transfers(
 /// Find all valid transfers from a single stop
 fn find_transfers_from_stop(
     graph: &TransitModel,
-    stop_nodes: &[Option<NodeIndex>],
+    stops_by_node: &HashMap<NodeIndex, Vec<RaptorStopId>>,
     source_idx: usize,
     source_node: NodeIndex,
     max_transfer_time: Time,
@@ -263,24 +269,26 @@ fn find_transfers_from_stop(
         Some(f64::from(max_transfer_time)),
     );
 
-    stop_nodes
+    transfers_from_reachable(&reachable, stops_by_node, source_idx, max_transfer_time)
+}
+
+/// The stop-side half of [`find_transfers_from_stop`], testable on its own.
+fn transfers_from_reachable(
+    reachable: &HashMap<NodeIndex, Time>,
+    stops_by_node: &HashMap<NodeIndex, Vec<RaptorStopId>>,
+    source_idx: RaptorStopId,
+    max_transfer_time: Time,
+) -> Vec<Transfer> {
+    reachable
         .iter()
-        .enumerate()
-        .filter_map(|(target_idx, target_node_opt)| {
-            // Skip self-transfers
-            if source_idx == target_idx {
-                return None;
-            }
-
-            // Skip stops that couldn't be snapped to streets
-            let target_node = (*target_node_opt)?;
-
-            // Check if target is reachable within time limit
-            reachable
-                .get(&target_node)
-                .filter(|&&time| time <= max_transfer_time)
-                .map(|&time| Transfer {
-                    target_stop: target_idx,
+        .filter(|&(_, &time)| time <= max_transfer_time)
+        .filter_map(|(node, &time)| Some((stops_by_node.get(node)?, time)))
+        .flat_map(|(stops, time)| {
+            stops
+                .iter()
+                .filter(move |&&target_stop| target_stop != source_idx)
+                .map(move |&target_stop| Transfer {
+                    target_stop,
                     duration: time,
                 })
         })
@@ -350,7 +358,7 @@ mod tests {
         let n1 = NodeIndex::new(1);
         let stop_nodes = vec![Some(n0), Some(n0), Some(n1), Some(n0), None];
 
-        let grouped = create_colocated_stop_transfers(&stop_nodes);
+        let grouped = create_colocated_stop_transfers(&group_stops_by_node(&stop_nodes));
         let as_map = to_sorted_targets(grouped);
 
         assert_eq!(as_map.get(&0), Some(&vec![(1, 0), (3, 0)]));
@@ -358,6 +366,64 @@ mod tests {
         assert_eq!(as_map.get(&3), Some(&vec![(0, 0), (1, 0)]));
         assert!(!as_map.contains_key(&2));
         assert!(!as_map.contains_key(&4));
+    }
+
+    /// The scan `transfers_from_reachable` replaced, kept as the reference.
+    fn transfers_by_scanning_every_stop(
+        reachable: &HashMap<NodeIndex, Time>,
+        stop_nodes: &[Option<NodeIndex>],
+        source_idx: RaptorStopId,
+        max_transfer_time: Time,
+    ) -> Vec<Transfer> {
+        stop_nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(target_idx, target_node_opt)| {
+                if source_idx == target_idx {
+                    return None;
+                }
+                let target_node = (*target_node_opt)?;
+                reachable
+                    .get(&target_node)
+                    .filter(|&&time| time <= max_transfer_time)
+                    .map(|&time| Transfer {
+                        target_stop: target_idx,
+                        duration: time,
+                    })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inverted_search_agrees_with_scanning_every_stop() {
+        let node = NodeIndex::new;
+        // One of each case the two formulations could disagree on.
+        let stop_nodes = vec![
+            Some(node(0)),
+            Some(node(1)),
+            Some(node(2)),
+            Some(node(3)),
+            Some(node(1)),
+            None,
+        ];
+        let reachable: HashMap<NodeIndex, Time> = [
+            (node(0), 0),
+            (node(1), 120),
+            (node(2), 600),
+            (node(3), 1500),
+            (node(9), 300),
+        ]
+        .into_iter()
+        .collect();
+
+        let stops_by_node = group_stops_by_node(&stop_nodes);
+        let inverted = transfers_from_reachable(&reachable, &stops_by_node, 0, 1200);
+        let scanned = transfers_by_scanning_every_stop(&reachable, &stop_nodes, 0, 1200);
+
+        assert_eq!(
+            to_sorted_targets(vec![(0, inverted)]),
+            to_sorted_targets(vec![(0, scanned)])
+        );
     }
 
     #[test]
