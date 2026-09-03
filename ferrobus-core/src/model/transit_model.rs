@@ -250,7 +250,12 @@ impl TransitPoint {
 
     /// Returns walking time to another point, if available
     pub fn walking_time_to(&self, other: &TransitPoint) -> Option<Time> {
-        self.walking_paths.get(&other.node_id).copied()
+        self.walking_time_to_node(other.node_id)
+    }
+
+    /// Returns walking time to a street network node, if it is within range.
+    pub(crate) fn walking_time_to_node(&self, node: NodeIndex) -> Option<Time> {
+        self.walking_paths.get(&node).copied()
     }
 
     /// Get the location of a transit stop by ID
