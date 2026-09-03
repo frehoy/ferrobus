@@ -65,8 +65,8 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         .read(filename)
         .map_err(|e| Error::InvalidData(format!("Error reading OSM data: {e}")))?;
 
-    // filter only pedestrian allowed ways and edges with Unknown pedestrian accessibility
-    let edges = edges
+    // Only a way's length is read, so the fat `Edge` values are dropped here.
+    let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
         .into_iter()
         .filter(|edge| {
             matches!(
@@ -74,7 +74,14 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
                 FootAccessibility::Allowed | FootAccessibility::Unknown
             )
         })
-        .collect::<Vec<_>>();
+        // A way whose ends are the same node is a loop nothing can route over.
+        .filter(|edge| edge.source != edge.target)
+        .map(|edge| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let weight = (edge.length() / WALKING_SPEED) as Time;
+            (edge.source, edge.target, weight)
+        })
+        .collect();
 
     let mut node_indices = HashMap::new();
 
@@ -89,21 +96,19 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         });
     }
 
-    for edge in edges {
+    for (source, target, weight) in edges {
         let source_index = *node_indices
-            .get(&edge.source)
-            .ok_or_else(|| Error::InvalidData(format!("Missing source node: {:?}", edge.source)))?;
+            .get(&source)
+            .ok_or_else(|| Error::InvalidData(format!("Missing source node: {source:?}")))?;
         let target_index = *node_indices
-            .get(&edge.target)
-            .ok_or_else(|| Error::InvalidData(format!("Missing target node: {:?}", edge.target)))?;
+            .get(&target)
+            .ok_or_else(|| Error::InvalidData(format!("Missing target node: {target:?}")))?;
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let weight = (edge.length() / WALKING_SPEED) as Time;
-
-        let edge_obj = StreetEdge { weight };
-
-        graph.add_edge(source_index, target_index, edge_obj);
+        graph.add_edge(source_index, target_index, StreetEdge { weight });
     }
+
+    // One entry per OSM node, and nothing below reads it.
+    drop(node_indices);
 
     // Keep only the largest connected component to avoid isolated parts of the graph
     // affecting routing
