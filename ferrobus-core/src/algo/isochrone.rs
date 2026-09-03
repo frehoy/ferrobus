@@ -5,6 +5,7 @@
 
 use geo::{MultiPolygon, Point, Polygon};
 use hashbrown::HashMap;
+use log::info;
 use petgraph::graph::NodeIndex;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,9 @@ use crate::{TransitPoint, multimodal_routing_one_to_many};
 
 /// Egress stops kept per grid cell; three is what the index has always kept.
 const GRID_EGRESS_STOPS: usize = 3;
+
+/// How many candidate cells are snapped at a time while building the index.
+const SNAP_CHUNK: usize = 1 << 16;
 
 /// One grid cell's connection to the transit network: 32 bytes, heap-free.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -116,24 +120,48 @@ impl IsochroneIndex {
         cell_resolution: u8,
         max_walking_time: Time,
     ) -> Result<Self, Error> {
-        let original_grid = create_hex_coverage(area.clone(), cell_resolution)?;
-        let grid_centroids = get_grid_centroids(&original_grid);
+        let resolution = Resolution::try_from(cell_resolution)
+            .map_err(|e| Error::InvalidData(format!("Got invalid H3 resolution {e}")))?;
 
-        let snapped: Vec<Option<GridPoint>> = grid_centroids
-            .par_iter()
-            .map(|point| GridPoint::snap(*point, transit_model, max_walking_time))
-            .collect();
+        let mut tiler = TilerBuilder::new(resolution)
+            .containment_mode(ContainmentMode::Covers)
+            .build();
+        tiler.add(area.clone())?;
 
+        let mut coverage = tiler.into_coverage();
+        let mut candidates: Vec<CellIndex> = Vec::with_capacity(SNAP_CHUNK);
         let mut grid = Vec::new();
         let mut points = Vec::new();
-        for (cell, point) in original_grid.iter().zip(snapped) {
-            if let Some(point) = point {
-                grid.push(*cell);
-                points.push(point);
+        let mut considered = 0usize;
+
+        loop {
+            candidates.clear();
+            candidates.extend(coverage.by_ref().take(SNAP_CHUNK));
+            if candidates.is_empty() {
+                break;
+            }
+            considered += candidates.len();
+
+            let snapped: Vec<Option<GridPoint>> = candidates
+                .par_iter()
+                .map(|cell| GridPoint::snap(cell_centroid(*cell), transit_model, max_walking_time))
+                .collect();
+
+            for (cell, point) in candidates.iter().zip(snapped) {
+                if let Some(point) = point {
+                    grid.push(*cell);
+                    points.push(point);
+                }
             }
         }
 
-        println!("Snapped {} of {}", points.len(), original_grid.len());
+        grid.shrink_to_fit();
+        points.shrink_to_fit();
+
+        info!(
+            "Isochrone index at resolution {cell_resolution}: snapped {} of {considered} cells",
+            grid.len()
+        );
 
         Ok(Self {
             grid,
@@ -245,26 +273,10 @@ pub fn calculate_percent_access_isochrone(
     Ok(percent_access)
 }
 
-fn create_hex_coverage(area: Polygon, resolution: u8) -> Result<Vec<CellIndex>, Error> {
-    let resolution = Resolution::try_from(resolution)
-        .map_err(|e| Error::InvalidData(format!("Got invalid H3 resolution {e}")))?;
+fn cell_centroid(cell: CellIndex) -> Point<f64> {
+    let lat_lon = LatLng::from(cell);
 
-    let mut tiler = TilerBuilder::new(resolution)
-        .containment_mode(ContainmentMode::Covers)
-        .build();
-    tiler.add(area)?;
-
-    Ok(tiler.into_coverage().collect::<Vec<_>>())
-}
-
-fn get_grid_centroids(grid: &[CellIndex]) -> Vec<Point<f64>> {
-    grid.iter()
-        .map(|cell| {
-            let lat_lon = LatLng::from(*cell);
-
-            Point::new(lat_lon.lng(), lat_lon.lat())
-        })
-        .collect()
+    Point::new(lat_lon.lng(), lat_lon.lat())
 }
 
 fn compute_reachable_cells(
