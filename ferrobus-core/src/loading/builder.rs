@@ -26,12 +26,24 @@ pub fn create_transit_model(config: &TransitModelConfig) -> Result<TransitModel,
 
     info!("Processing public transit data (GTFS)");
     let transit_data = transit_model_from_gtfs(config)?;
+    info!(
+        "GTFS processed: {} stops, {} routes",
+        transit_data.stops.len(),
+        transit_data.routes.len()
+    );
 
     let street_graph = graph_handle
         .join()
         .map_err(|_| Error::UnrecoverableError("OSM processing thread panicked"))??;
+    info!(
+        "Street graph built: {} nodes, {} edges",
+        street_graph.graph.node_count(),
+        street_graph.graph.edge_count()
+    );
 
+    info!("Validating street/transit overlap");
     validate_graph_transit_overlap(&street_graph, &transit_data);
+    info!("Overlap validated");
 
     let mut graph = TransitModel::with_transit(
         street_graph,
@@ -47,6 +59,7 @@ pub fn create_transit_model(config: &TransitModelConfig) -> Result<TransitModel,
         graph.transit_data.transfers.len()
     );
 
+    info!("Auditing transit model");
     match crate::model::audit_transit_model(&graph) {
         Ok(()) => info!("Transit model audit passed"),
         Err(err) => {

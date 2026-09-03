@@ -15,13 +15,25 @@ pub(crate) fn calculate_transfers(graph: &mut TransitModel) {
 
     // Snap all transit stops to street network nodes (Some = snapped, None = too far)
     let stop_nodes = snap_stops_to_network(graph);
+    info!(
+        "Snapped {} of {stop_count} stops to the street network",
+        stop_nodes.iter().filter(|node| node.is_some()).count()
+    );
 
     // One reverse index, shared by the search and the co-located links below.
     let stops_by_node = group_stops_by_node(&stop_nodes);
 
-    // Calculate transfers for all stops that could be snapped
+    info!("Computing street transfers");
     let computed_transfers =
         calculate_stop_transfers(graph, &stop_nodes, &stops_by_node, max_transfer_time);
+    info!(
+        "Computed {} street transfers from {} stops",
+        computed_transfers
+            .iter()
+            .map(|(_, t)| t.len())
+            .sum::<usize>(),
+        computed_transfers.len()
+    );
 
     // Add zero-time links for stops snapped to the same node, so routing can
     // still use co-located stops.
@@ -58,11 +70,17 @@ pub(crate) fn calculate_transfers(graph: &mut TransitModel) {
     // 1. computed street transfers
     // 2. synthetic co-located transfers
     // 3. GTFS transfers (highest precedence)
+    info!("Merging transfer sets");
     let computed_with_colocated =
         merge_transfers(computed_transfers, synthetic_colocated_transfers);
     let merged_transfers = merge_transfers(computed_with_colocated, gtfs_transfers);
+    info!(
+        "Merged to {} transfers",
+        merged_transfers.iter().map(|(_, t)| t.len()).sum::<usize>()
+    );
 
     update_transit_model_with_transfers(graph, merged_transfers, &stop_nodes);
+    info!("Transfers written to the model");
 }
 
 fn convert_gtfs_transfers_to_internal(

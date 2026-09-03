@@ -61,9 +61,11 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
 
     let mut graph = UnGraph::<StreetNode, StreetEdge>::new_undirected();
     // Store OSM node IDs and their corresponding graph node indices
+    // No tag filter here: osm4routing already drops what it cannot walk.
     let (nodes, edges) = osm4routing::Reader::new()
         .read(filename)
         .map_err(|e| Error::InvalidData(format!("Error reading OSM data: {e}")))?;
+    info!("OSM read: {} nodes, {} ways", nodes.len(), edges.len());
 
     // Only a way's length is read, so the fat `Edge` values are dropped here.
     let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
@@ -77,6 +79,7 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
             (edge.source, edge.target, weight)
         })
         .collect();
+    info!("Kept {} pedestrian ways", edges.len());
 
     let mut node_indices = HashMap::new();
 
@@ -91,6 +94,8 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         });
     }
 
+    info!("Indexed {} distinct OSM nodes", node_indices.len());
+
     for (source, target, weight) in edges {
         let source_index = *node_indices
             .get(&source)
@@ -104,10 +109,21 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
 
     // One entry per OSM node, and nothing below reads it.
     drop(node_indices);
+    info!(
+        "Graph assembled: {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     // Keep only the largest connected component to avoid isolated parts of the graph
     // affecting routing
+    info!("Pruning to the largest connected component");
     keep_largest_component(&mut graph)?;
+    info!(
+        "Street network pruned to {} nodes, {} edges",
+        graph.node_count(),
+        graph.edge_count()
+    );
 
     info!("Building R-Tree spatial index");
     let rtree = build_rtree(&graph);
@@ -153,6 +169,7 @@ mod tests {
         keep_largest_component(&mut graph).expect("a graph with edges has a component");
 
         assert_eq!(graph.node_count(), 3);
+        // Pruning in place must not shed or double the surviving edges.
         assert_eq!(graph.edge_count(), 2);
         let kept: HashSet<i64> = graph.node_weights().map(|n| n.id.0).collect();
         assert_eq!(kept, HashSet::from([1, 2, 3]));
