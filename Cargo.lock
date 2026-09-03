@@ -608,6 +608,7 @@ dependencies = [
  "libc",
  "log",
  "osm4routing",
+ "osmpbf",
  "petgraph",
  "postcard",
  "rayon",
@@ -615,6 +616,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "wkt",
 ]
 
 [[package]]
@@ -1355,6 +1357,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
+name = "memmap2"
+version = "0.5.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1513,6 +1524,20 @@ dependencies = [
  "geo-types",
  "osmpbfreader",
  "serde",
+]
+
+[[package]]
+name = "osmpbf"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d689d6e9f254bbd63893ce00a27147e41fe94bf3abca70f85b5345afb3cb728"
+dependencies = [
+ "byteorder",
+ "flate2",
+ "memmap2",
+ "protobuf",
+ "protobuf-codegen",
+ "rayon",
 ]
 
 [[package]]

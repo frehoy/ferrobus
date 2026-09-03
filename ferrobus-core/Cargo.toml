@@ -31,6 +31,10 @@ libc = "0.2"
 [dev-dependencies]
 criterion = "0.8"
 dotenvy = "0.15"
+libc = "0.2"
+wkt = "0.14.0"
+# Reading raw OSM tags, for the memprobe example only.
+osmpbf = "0.3"
 
 [[bench]]
 name = "bench_main"
