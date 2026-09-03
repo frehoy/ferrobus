@@ -236,7 +236,8 @@ impl TransitPoint {
             }
         }
 
-        nearest_stops.sort_by_key(|&(_, time)| time);
+        // Tie-break on the stop id; `walking_paths` is a hash map.
+        nearest_stops.sort_unstable_by_key(|&(stop_id, time)| (time, stop_id));
         nearest_stops.truncate(max_stops);
 
         Ok(TransitPoint {
