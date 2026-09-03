@@ -10,6 +10,26 @@ use hashbrown::HashMap;
 use petgraph::graph::NodeIndex;
 use serde::{Deserialize, Serialize};
 
+/// Writes `node_to_stop` in node order; still a map, just a settled one.
+fn serialize_node_to_stop_sorted<S>(
+    map: &HashMap<NodeIndex, RaptorStopId>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeMap;
+
+    let mut entries: Vec<(&NodeIndex, &RaptorStopId)> = map.iter().collect();
+    entries.sort_unstable_by_key(|(node, _)| node.index());
+
+    let mut out = serializer.serialize_map(Some(entries.len()))?;
+    for (node, stop) in entries {
+        out.serialize_entry(node, stop)?;
+    }
+    out.end()
+}
+
 /// Main public transit data structure
 /// based on original microsoft paper
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +47,7 @@ pub struct PublicTransitData {
     /// Transfers between stops
     pub transfers: Vec<Transfer>,
     /// Mapping road network nodes to stops
+    #[serde(serialize_with = "serialize_node_to_stop_sorted")]
     pub node_to_stop: HashMap<NodeIndex, RaptorStopId>,
     /// Metadata for feeds
     pub feeds_meta: Vec<FeedMeta>,
