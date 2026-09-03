@@ -68,12 +68,7 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
     // Only a way's length is read, so the fat `Edge` values are dropped here.
     let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
         .into_iter()
-        .filter(|edge| {
-            matches!(
-                edge.properties.foot,
-                FootAccessibility::Allowed | FootAccessibility::Unknown
-            )
-        })
+        .filter(|edge| edge.properties.foot == FootAccessibility::Allowed)
         // A way whose ends are the same node is a loop nothing can route over.
         .filter(|edge| edge.source != edge.target)
         .map(|edge| {
