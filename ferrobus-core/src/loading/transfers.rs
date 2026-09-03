@@ -301,6 +301,13 @@ fn update_transit_model_with_transfers(
     stop_transfers: Vec<(RaptorStopId, Vec<Transfer>)>,
     stop_nodes: &[Option<NodeIndex>],
 ) {
+    // This order decides `transfers_start`, so it reaches the persisted model.
+    let mut stop_transfers = stop_transfers;
+    stop_transfers.sort_unstable_by_key(|&(stop_id, _)| stop_id);
+    for (_, transfers) in &mut stop_transfers {
+        transfers.sort_unstable_by_key(|transfer| transfer.target_stop);
+    }
+
     // Flatten transfers and build index
     let mut all_transfers = Vec::new();
     let mut transfer_indices = HashMap::new();
