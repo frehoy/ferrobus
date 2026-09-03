@@ -200,45 +200,71 @@ pub struct TransitPoint {
     pub(crate) walking_paths: HashMap<NodeIndex, Time>,
 }
 
+/// Snaps `point` onto the network and walks outwards, within the time budget.
+fn snap_and_walk(
+    point: Point<f64>,
+    graph: &TransitModel,
+    max_walking_time: Time,
+) -> Result<(NodeIndex, Time, HashMap<NodeIndex, Time>), Error> {
+    let (node_id, distance) = graph
+        .street_graph
+        .nearest_node(&point)
+        .ok_or(Error::NoPointsFound)?;
+
+    if distance > max_walking_time {
+        return Err(Error::NoPointsFound);
+    }
+
+    let walking_paths = dijkstra_path_weights(
+        &graph.street_graph,
+        node_id,
+        None,
+        Some(f64::from(max_walking_time - distance)),
+    );
+
+    Ok((node_id, distance, walking_paths))
+}
+
+/// Picks the `max_stops` nearest stops from a walk-time map, `access` seconds in.
+fn nearest_stops_from_walk(
+    walking_paths: &HashMap<NodeIndex, Time>,
+    graph: &TransitModel,
+    budget: Time,
+    access: Time,
+    max_stops: usize,
+) -> Vec<(RaptorStopId, Time)> {
+    let mut nearest_stops = Vec::new();
+
+    for (&node, &time) in walking_paths {
+        if time <= budget
+            && let Some(&stop_id) = graph.transit_data.node_to_stop.get(&node)
+        {
+            nearest_stops.push((stop_id, time + access));
+        }
+    }
+
+    // Tie-break on the stop id; `walking_paths` is a hash map.
+    nearest_stops.sort_unstable_by_key(|&(stop_id, time)| (time, stop_id));
+    nearest_stops.truncate(max_stops);
+    nearest_stops
+}
+
 impl TransitPoint {
     /// Creates a new point connected to the transit network
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn new(
         point: Point<f64>,
         graph: &TransitModel,
         max_walking_time: Time,
         max_stops: usize,
     ) -> Result<Self, Error> {
-        let (node_id, distance) = graph
-            .street_graph
-            .nearest_node(&point)
-            .ok_or(Error::NoPointsFound)?;
-
-        if distance > max_walking_time {
-            return Err(Error::NoPointsFound);
-        }
-        //Pre-calculated walking paths to all nodes within the time limit
-        let walking_paths = dijkstra_path_weights(
-            &graph.street_graph,
-            node_id,
-            None,
-            Some(f64::from(max_walking_time - distance)),
+        let (node_id, distance, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
+        let nearest_stops = nearest_stops_from_walk(
+            &walking_paths,
+            graph,
+            max_walking_time - distance,
+            distance,
+            max_stops,
         );
-
-        // Find `max_stops` nearest stops
-        let mut nearest_stops = Vec::new();
-
-        for (&node, &time) in &walking_paths {
-            if time <= max_walking_time - distance
-                && let Some(&stop_id) = graph.transit_data.node_to_stop.get(&node)
-            {
-                nearest_stops.push((stop_id, time as Time + distance));
-            }
-        }
-
-        // Tie-break on the stop id; `walking_paths` is a hash map.
-        nearest_stops.sort_unstable_by_key(|&(stop_id, time)| (time, stop_id));
-        nearest_stops.truncate(max_stops);
 
         Ok(TransitPoint {
             geometry: point,
@@ -246,6 +272,25 @@ impl TransitPoint {
             nearest_stops,
             walking_paths,
         })
+    }
+
+    /// Snaps a point, keeping only what routing reads off a destination.
+    pub(crate) fn snap_destination(
+        point: Point<f64>,
+        graph: &TransitModel,
+        max_walking_time: Time,
+        max_stops: usize,
+    ) -> Result<(NodeIndex, Vec<(RaptorStopId, Time)>), Error> {
+        let (node_id, distance, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
+        let nearest_stops = nearest_stops_from_walk(
+            &walking_paths,
+            graph,
+            max_walking_time - distance,
+            distance,
+            max_stops,
+        );
+
+        Ok((node_id, nearest_stops))
     }
 
     /// Returns walking time to another point, if available
