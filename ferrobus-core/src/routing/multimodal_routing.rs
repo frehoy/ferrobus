@@ -1,10 +1,30 @@
 use hashbrown::HashMap;
+use petgraph::graph::NodeIndex;
 
 use crate::{
-    Error, MAX_CANDIDATE_STOPS, Time, TransitModel,
+    Error, MAX_CANDIDATE_STOPS, RaptorStopId, Time, TransitModel,
     model::TransitPoint,
     routing::raptor::{RaptorError, RaptorResult, raptor},
 };
+
+/// Everything one-to-many routing reads off a destination.
+pub trait RoutingTarget {
+    /// The street network node this destination snapped to.
+    fn target_node(&self) -> NodeIndex;
+
+    /// Nearby stops to alight at, as `(stop, walking seconds)`, nearest first.
+    fn egress_stops(&self) -> impl Iterator<Item = (RaptorStopId, Time)> + '_;
+}
+
+impl RoutingTarget for TransitPoint {
+    fn target_node(&self) -> NodeIndex {
+        self.node_id
+    }
+
+    fn egress_stops(&self) -> impl Iterator<Item = (RaptorStopId, Time)> + '_ {
+        self.nearest_stops.iter().copied()
+    }
+}
 
 /// Combined multimodal route result
 #[derive(Debug, Clone)]
@@ -162,10 +182,10 @@ pub fn multimodal_routing(
 /// Routing from one point to many. It exploits basic RAPTOR principles to
 /// calculate transit routes to all stops from the access point, so whole calculation
 /// can be done in one raptor run.
-pub fn multimodal_routing_one_to_many(
+pub fn multimodal_routing_one_to_many<T: RoutingTarget>(
     transit_model: &TransitModel,
     start_point: &TransitPoint,
-    end_points: &[TransitPoint],
+    end_points: &[T],
     departure_time: Time,
     max_transfers: usize,
 ) -> Result<Vec<Option<MultiModalResult>>, Error> {
@@ -195,11 +215,11 @@ pub fn multimodal_routing_one_to_many(
     }
 
     for (end_idx, end_point) in end_points.iter().enumerate() {
-        let direct_walking = start_point.walking_time_to(end_point);
+        let direct_walking = start_point.walking_time_to_node(end_point.target_node());
         let mut best_candidate: Option<CandidateJourney> = None;
 
         for (_access_stop, (access_time, transit_times)) in &transit_results {
-            for &(egress_stop, egress_time) in &end_point.nearest_stops {
+            for (egress_stop, egress_time) in end_point.egress_stops() {
                 // Skip if walking path is faster
                 if let Some(walking_time) = direct_walking
                     && access_time + egress_time >= walking_time
