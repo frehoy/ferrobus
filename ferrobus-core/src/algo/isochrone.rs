@@ -171,6 +171,11 @@ impl IsochroneIndex {
     }
 }
 
+/// Cells reachable within `cutoff`, as a grid rather than a dissolved polygon.
+///
+/// # Errors
+///
+/// Returns an error if the underlying routing fails.
 pub fn calculate_isochrone(
     transit_model: &TransitModel,
     start_point: &TransitPoint,
@@ -179,7 +184,7 @@ pub fn calculate_isochrone(
     cutoff: Time,
     index: &IsochroneIndex,
 ) -> Result<MultiPolygon, Error> {
-    let reached_cells = compute_reachable_cells(
+    let reached_cells = reachable_cells(
         transit_model,
         start_point,
         departure_time,
@@ -243,7 +248,7 @@ pub fn calculate_percent_access_isochrone(
     let all_reached_cells: Result<Vec<Vec<CellIndex>>, Error> = departure_times
         .par_iter()
         .map(|&departure_time| {
-            compute_reachable_cells(
+            reachable_cells(
                 transit_model,
                 start_point,
                 departure_time,
@@ -279,12 +284,17 @@ fn cell_centroid(cell: CellIndex) -> Point<f64> {
     Point::new(lat_lon.lng(), lat_lon.lat())
 }
 
-fn compute_reachable_cells(
+/// Cells reachable within `cutoff`, as a grid rather than a dissolved polygon.
+///
+/// # Errors
+///
+/// Returns an error if the underlying routing fails.
+pub fn reachable_cells(
     transit_model: &TransitModel,
     start_point: &TransitPoint,
-    departure_time: u32,
+    departure_time: Time,
     max_transfers: usize,
-    cutoff: u32,
+    cutoff: Time,
     index: &IsochroneIndex,
 ) -> Result<Vec<CellIndex>, Error> {
     let grid = &index.grid;
