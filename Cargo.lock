@@ -1516,7 +1516,6 @@ dependencies = [
 [[package]]
 name = "osm4routing"
 version = "0.8.1"
-source = "git+https://github.com/frehoy/osm4routing2.git?rev=9952de86396571f338d77d967edd0ab3cd6bf213#9952de86396571f338d77d967edd0ab3cd6bf213"
 dependencies = [
  "ahash",
  "clap",

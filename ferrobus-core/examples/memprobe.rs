@@ -10,6 +10,7 @@
 //! cargo run --release --example memprobe -- load-index   <model.ferrobus> <index.ferrobus>
 //! cargo run --release --example memprobe -- isochrone    <model.ferrobus> <index.ferrobus> <lng> <lat>
 //! cargo run --release --example memprobe -- route        <model.ferrobus> <from_lng> <from_lat> <to_lng> <to_lat>
+//! cargo run --release --example memprobe -- walk-path    <model.ferrobus> <from_lng> <from_lat> <to_lng> <to_lat>
 //! ```
 //!
 //! Environment:
@@ -32,9 +33,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use ferrobus_core::WALKING_SPEED;
 use ferrobus_core::persist;
 use ferrobus_core::prelude::*;
 use geo::{Coord, LineString, Point, Polygon};
+use petgraph::graph::NodeIndex;
+use petgraph::visit::EdgeRef;
+use std::collections::HashMap;
 use wkt::ToWkt;
 
 /// Peak resident set size of this process, in bytes.
@@ -341,6 +346,95 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     result.travel_time, result.walking_time, result.transit_time, result.transfers
                 ),
                 None => println!("no route found"),
+            }
+            mark("routed", started);
+        }
+        // The walking route between two points, so a detour can be seen rather
+        // than inferred from its duration.
+        "walk-path" => {
+            let model_path = PathBuf::from(&args[1]);
+            let coords: Vec<f64> = args[2..6]
+                .iter()
+                .map(|value| value.parse())
+                .collect::<Result<_, _>>()?;
+
+            mark("start", started);
+            let model = persist::load_transit_model(&model_path)?;
+            mark("model loaded", started);
+
+            let graph = &model.street_graph().graph;
+            let snap = |lng: f64, lat: f64| {
+                model
+                    .street_graph()
+                    .rtree
+                    .nearest_neighbor(&Point::new(lng, lat))
+                    .expect("point should snap to the network")
+                    .data
+            };
+            let (from, to) = (snap(coords[0], coords[1]), snap(coords[2], coords[3]));
+
+            // Plain Dijkstra over the public graph, keeping predecessors so the
+            // route itself can be printed.
+            let mut dist: HashMap<NodeIndex, u32> = HashMap::new();
+            let mut prev: HashMap<NodeIndex, NodeIndex> = HashMap::new();
+            let mut heap = std::collections::BinaryHeap::new();
+            dist.insert(from, 0);
+            heap.push(std::cmp::Reverse((0u32, from.index())));
+
+            while let Some(std::cmp::Reverse((cost, raw))) = heap.pop() {
+                let node = NodeIndex::new(raw);
+                if node == to {
+                    break;
+                }
+                if cost > *dist.get(&node).unwrap_or(&u32::MAX) {
+                    continue;
+                }
+                for edge in graph.edges(node) {
+                    let next = if edge.source() == node {
+                        edge.target()
+                    } else {
+                        edge.source()
+                    };
+                    let step = cost + edge.weight().weight;
+                    if step < *dist.get(&next).unwrap_or(&u32::MAX) {
+                        dist.insert(next, step);
+                        prev.insert(next, node);
+                        heap.push(std::cmp::Reverse((step, next.index())));
+                    }
+                }
+            }
+
+            match dist.get(&to) {
+                None => println!("no walking path"),
+                Some(&seconds) => {
+                    let mut path = vec![to];
+                    while let Some(&p) = prev.get(path.last().expect("non-empty")) {
+                        path.push(p);
+                    }
+                    path.reverse();
+
+                    let metres = f64::from(seconds) * WALKING_SPEED;
+                    let straight = {
+                        let (a, b) = (graph[from].geometry, graph[to].geometry);
+                        let (dx, dy) = (b.x() - a.x(), b.y() - a.y());
+                        ((dy * 111_320.0).powi(2)
+                            + (dx * 111_320.0 * a.y().to_radians().cos()).powi(2))
+                        .sqrt()
+                    };
+                    println!(
+                        "walk={seconds}s  {metres:.0} m over {} nodes  straight line {straight:.0} m  detour x{:.1}",
+                        path.len(),
+                        metres / straight
+                    );
+                    let wkt: Vec<String> = path
+                        .iter()
+                        .map(|n| {
+                            let p = graph[*n].geometry;
+                            format!("{:.6} {:.6}", p.x(), p.y())
+                        })
+                        .collect();
+                    println!("LINESTRING({})", wkt.join(", "));
+                }
             }
             mark("routed", started);
         }

@@ -1,6 +1,4 @@
-use hashbrown::HashMap;
-#[cfg(test)]
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use log::info;
 use osm4routing::FootAccessibility;
 use petgraph::graph::{NodeIndex, UnGraph};
@@ -55,6 +53,105 @@ fn keep_largest_component(graph: &mut UnGraph<StreetNode, StreetEdge>) -> Result
     Ok(())
 }
 
+/// A closed way a pedestrian may cross rather than walk around.
+struct PedestrianArea {
+    way: i64,
+    boundary: Vec<(osm4routing::NodeId, geo::Coord<f64>)>,
+}
+
+/// Collects the walkable areas out of the ways, before they are compacted.
+///
+/// osm4routing has already dropped anything a pedestrian cannot use, so an
+/// `area=yes` way still present here is one we are allowed to walk on -- which
+/// is close to OpenTripPlanner's `isRoutableArea` without having to restate it.
+fn collect_pedestrian_areas(edges: &[osm4routing::Edge]) -> Vec<PedestrianArea> {
+    let mut by_way: HashMap<i64, Vec<(osm4routing::NodeId, geo::Coord<f64>)>> = HashMap::new();
+
+    for edge in edges {
+        if edge.properties.foot != FootAccessibility::Allowed
+            || edge.tags.get("area").map(String::as_str) != Some("yes")
+        {
+            continue;
+        }
+        by_way.entry(edge.osm_id.0).or_default().extend(
+            edge.nodes
+                .iter()
+                .copied()
+                .zip(edge.geometry.iter().copied()),
+        );
+    }
+
+    // Sorted, and deduplicated in first-seen order, so the crossings this
+    // produces are a function of the extract and not of hash iteration.
+    let mut areas: Vec<PedestrianArea> = by_way
+        .into_iter()
+        .map(|(way, mut boundary)| {
+            let mut seen = HashSet::new();
+            boundary.retain(|(node, _)| seen.insert(*node));
+            PedestrianArea { way, boundary }
+        })
+        .filter(|area| area.boundary.len() >= 3)
+        .collect();
+    areas.sort_unstable_by_key(|area| area.way);
+    areas
+}
+
+/// Joins every boundary node of an area to a synthetic node at its centre.
+///
+/// A closed way is otherwise just a ring, so crossing a platform means walking
+/// its perimeter -- on a 250 m underground platform that is the difference
+/// between stepping on and going round twice. Two hops through the middle
+/// approximate the crossing at a fraction of the cost of a visibility graph.
+fn add_area_crossings(
+    graph: &mut UnGraph<StreetNode, StreetEdge>,
+    node_indices: &HashMap<osm4routing::NodeId, NodeIndex>,
+    areas: &[PedestrianArea],
+) -> usize {
+    let mut crossed = 0;
+
+    for area in areas {
+        let present: Vec<(NodeIndex, geo::Coord<f64>)> = area
+            .boundary
+            .iter()
+            .filter_map(|(node, coord)| Some((*node_indices.get(node)?, *coord)))
+            .collect();
+        if present.len() < 3 {
+            continue;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let count = present.len() as f64;
+        let centre = geo::Coord {
+            x: present.iter().map(|(_, c)| c.x).sum::<f64>() / count,
+            y: present.iter().map(|(_, c)| c.y).sum::<f64>() / count,
+        };
+
+        // Negative, because OSM node ids are positive: this cannot collide with
+        // a real one, and it says in the data that the node is synthetic.
+        let hub = graph.add_node(StreetNode {
+            id: osm4routing::NodeId(-area.way),
+            geometry: centre.into(),
+        });
+
+        for (index, coord) in present {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let weight = (metres_between(coord, centre) / WALKING_SPEED) as Time;
+            graph.add_edge(index, hub, StreetEdge { weight });
+        }
+        crossed += 1;
+    }
+
+    crossed
+}
+
+/// Great-circle distance in metres, near enough at the scale of one way.
+fn metres_between(a: geo::Coord<f64>, b: geo::Coord<f64>) -> f64 {
+    let mid_lat = f64::midpoint(a.y, b.y).to_radians();
+    let dx = (b.x - a.x) * 111_320.0 * mid_lat.cos();
+    let dy = (b.y - a.y) * 111_320.0;
+    dx.hypot(dy)
+}
+
 /// Create the street network graph based on an OSM .pbf file
 pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGraph, Error> {
     info!("Reading OSM data from: {}", filename.as_ref().display());
@@ -63,9 +160,15 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
     // Store OSM node IDs and their corresponding graph node indices
     // No tag filter here: osm4routing already drops what it cannot walk.
     let (nodes, edges) = osm4routing::Reader::new()
+        // The one tag the graph needs beyond accessibility: whether the way
+        // encloses ground you may walk across, rather than a line you follow.
+        .read_tag("area")
         .read(filename)
         .map_err(|e| Error::InvalidData(format!("Error reading OSM data: {e}")))?;
     info!("OSM read: {} nodes, {} ways", nodes.len(), edges.len());
+
+    let areas = collect_pedestrian_areas(&edges);
+    info!("Found {} walkable areas", areas.len());
 
     // Only a way's length is read, so the fat `Edge` values are dropped here.
     let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
@@ -107,6 +210,9 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         graph.add_edge(source_index, target_index, StreetEdge { weight });
     }
 
+    let crossed = add_area_crossings(&mut graph, &node_indices, &areas);
+    info!("Added crossings through {crossed} areas");
+
     // One entry per OSM node, and nothing below reads it.
     drop(node_indices);
     info!(
@@ -137,6 +243,12 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
 pub(crate) fn build_rtree(graph: &UnGraph<StreetNode, StreetEdge>) -> RTree<IndexedPoint> {
     let mut points = Vec::with_capacity(graph.node_count());
     for (idx, node) in graph.node_weights().enumerate() {
+        // Synthetic area centres are somewhere to walk through, not somewhere
+        // to arrive: snapping a query to one would put it in the middle of a
+        // polygon rather than on the network.
+        if node.id.0 < 0 {
+            continue;
+        }
         let idx = NodeIndex::new(idx);
         points.push(IndexedPoint::new(node.geometry, idx));
     }
