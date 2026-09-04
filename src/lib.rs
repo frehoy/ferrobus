@@ -3,7 +3,7 @@ use pyo3::prelude::*;
 use isochrone::{
     PyIsochroneIndex, calculate_bulk_isochrones, calculate_isochrone,
     calculate_percent_access_isochrone, create_isochrone_index, py_load_isochrone_index,
-    py_save_isochrone_index,
+    py_save_isochrone_index, reachable_cells,
 };
 use matrix::{travel_time_matrix, travel_time_statistics};
 use model::{
@@ -115,6 +115,7 @@ fn ferrobus(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create_isochrone_index, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_isochrone, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_bulk_isochrones, m)?)?;
+    m.add_function(wrap_pyfunction!(reachable_cells, m)?)?;
     m.add_function(wrap_pyfunction!(calculate_percent_access_isochrone, m)?)?;
     m.add_function(wrap_pyfunction!(py_save_isochrone_index, m)?)?;
     m.add_function(wrap_pyfunction!(py_load_isochrone_index, m)?)?;
