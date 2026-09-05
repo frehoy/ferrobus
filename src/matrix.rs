@@ -99,7 +99,8 @@ pub fn travel_time_matrix(
 ///     A list where each element corresponds to an origin point and contains
 ///     the computed travel time statistic in seconds, or None if fewer than the
 ///     specified percentage of targets are reachable from that origin.
-#[allow(clippy::too_many_arguments)]
+// Counts and aggregate travel times are converted to approximate floating-point statistics.
+#[allow(clippy::too_many_arguments, clippy::cast_precision_loss)]
 #[stubgen]
 #[pyfunction]
 #[pyo3(signature = (transit_model, points, departure_time, max_transfers, threshold=0.75, stat="mean", filter_cutoff=None))]

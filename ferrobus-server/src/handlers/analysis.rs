@@ -50,6 +50,8 @@ pub(crate) async fn matrix(
     Ok(Json(response))
 }
 
+// Counts and aggregate travel times are converted to approximate floating-point statistics.
+#[allow(clippy::cast_precision_loss)]
 pub(crate) async fn statistics(
     State(state): State<AppState>,
     Json(req): Json<StatisticsRequest>,

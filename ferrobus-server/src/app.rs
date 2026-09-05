@@ -141,7 +141,7 @@ async fn shutdown_signal() {
         match signal(SignalKind::terminate()) {
             Ok(mut sigterm) => {
                 tokio::select! {
-                    _ = ctrl_c => {}
+                    () = ctrl_c => {}
                     _ = sigterm.recv() => info!("shutdown signal received: sigterm"),
                 }
             }
