@@ -12,6 +12,8 @@ on:
 jobs:
   benchmarks:
     name: Run benchmarks
+    # The hosted benchmark integration is configured for upstream.
+    if: ${{ github.repository == 'chingiztob/ferrobus' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

@@ -152,7 +152,8 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'alpha')) }}
+    # Forks may build artifacts, but only upstream may publish packages or releases.
+    if: ${{ github.repository == 'chingiztob/ferrobus' && (github.event_name == 'workflow_dispatch' || (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && !contains(github.ref_name, 'rc') && !contains(github.ref_name, 'beta') && !contains(github.ref_name, 'alpha'))) }}
     needs: [linux, musllinux, windows, macos, sdist]
     permissions:
       id-token: write
