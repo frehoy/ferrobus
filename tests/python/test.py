@@ -1,5 +1,6 @@
 import json
 
+import h3
 import pytest
 
 import ferrobus
@@ -238,10 +239,8 @@ def test_reachable_cells(model):
     grid = set(index.cells())
 
     assert near, "a 15 minute cutoff should reach something"
-    # H3 indices are 15 hex characters at resolution 8.
     assert all(len(c) == 15 and int(c, 16) for c in near)
 
-    # Only cells the index holds, and more time cannot reach less ground.
     assert near <= grid
     assert far <= grid
     assert near < far, "the cutoff made no difference"
@@ -250,8 +249,6 @@ def test_reachable_cells(model):
 
 def test_reachable_cells_are_readable_by_h3(model):
     """The reason these are strings: h3-py should take them without conversion."""
-    h3 = pytest.importorskip("h3")
-
     lat, lon = 56.25788847445582, 93.53960625054688
     point = ferrobus.create_transit_point(lat, lon, model)
     area_wkt = "POLYGON ((93.57274857628481 56.18357044999381, 93.57274857628481 56.30437667924404, 93.39795011002934 56.30437667924404, 93.39795011002934 56.18357044999381, 93.57274857628481 56.18357044999381))"  # noqa: E501
