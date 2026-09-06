@@ -298,3 +298,197 @@ impl StreetGraph {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routing::dijkstra::dijkstra_path_weights;
+    use petgraph::graph::UnGraph;
+
+    fn network(points: &[(f64, f64)], weight: Time) -> StreetGraph {
+        let geometry: Vec<_> = points.iter().map(|&(x, y)| Point::new(x, y)).collect();
+        let mut graph = UnGraph::new_undirected();
+        let source = graph.add_node(StreetNode {
+            id: osm4routing::NodeId(1),
+            geometry: geometry[0],
+        });
+        let target = graph.add_node(StreetNode {
+            id: osm4routing::NodeId(2),
+            geometry: *geometry.last().unwrap(),
+        });
+        graph.add_edge(source, target, StreetEdge { weight, geometry });
+        StreetGraph::new(graph)
+    }
+
+    #[test]
+    fn multiple_stops_take_partial_edges_and_preserve_total_weight() {
+        let mut graph = network(&[(0., 0.), (0.01, 0.)], 1000);
+        let stops = graph.link_stops(
+            &[
+                Point::new(0.004, 0.),
+                Point::new(0.0045, 0.),
+                Point::new(0.004, 0.),
+            ],
+            1200,
+        );
+        let from = stops[0].unwrap();
+        let to = stops[1].unwrap();
+        assert_eq!(stops[0], stops[2]);
+        let distances = dijkstra_path_weights(&graph, from, None, None);
+        assert_eq!(distances[&to], 50);
+        assert_eq!(
+            graph.graph.edge_weights().map(|e| e.weight).sum::<Time>(),
+            1000
+        );
+        assert_eq!(graph.graph.node_count(), 4);
+    }
+
+    #[test]
+    fn curved_geometry_is_not_replaced_by_a_junction_chord() {
+        let mut graph = network(&[(0., 0.), (0., 0.01), (0.01, 0.01)], 1000);
+        let point = Point::new(0., 0.009);
+        let snap = graph.nearest_edge(point).unwrap();
+        assert!(Haversine.distance(point, snap.point) < 0.01);
+        assert!((440..460).contains(&snap.offset));
+        let nodes = graph.link_stops(&[point], 1000);
+        assert!(nodes[0].is_some());
+        assert!(
+            graph
+                .graph
+                .edge_weights()
+                .any(|e| e.geometry.contains(&Point::new(0., 0.01)))
+        );
+        assert_eq!(
+            graph.graph.edge_weights().map(|e| e.weight).sum::<Time>(),
+            1000
+        );
+    }
+
+    #[test]
+    fn stop_connectors_are_charged_and_not_indexed_as_streets() {
+        let mut graph = network(&[(0., 0.), (0.01, 0.)], 1000);
+        let p = Point::new(0.005, 0.0001);
+        let access = graph.nearest_edge(p).unwrap().access;
+        let stops = graph.link_stops(&[p, Point::new(0.005, 0.01)], 20);
+        assert!(stops[1].is_none());
+        assert_eq!(graph.nearest_edge(p).unwrap().access, access);
+        let distances = dijkstra_path_weights(&graph, stops[0].unwrap(), None, None);
+        assert_eq!(distances[&NodeIndex::new(0)], 500 + access);
+    }
+
+    #[test]
+    fn splitting_multiple_edges_is_reproducible() {
+        let mut graph = network(&[(0., 0.), (0.01, 0.)], 1000);
+        let c = graph.graph.add_node(StreetNode {
+            id: osm4routing::NodeId(3),
+            geometry: Point::new(0.02, 0.),
+        });
+        graph.graph.add_edge(
+            NodeIndex::new(1),
+            c,
+            StreetEdge {
+                weight: 1000,
+                geometry: vec![Point::new(0.01, 0.), Point::new(0.02, 0.)],
+            },
+        );
+        graph.edge_rtree = graph.build_edge_index();
+        let mut other = graph.clone();
+        let points = [Point::new(0.005, 0.), Point::new(0.015, 0.)];
+        let stops = graph.link_stops(&points, 1200);
+        assert_eq!(stops, other.link_stops(&points, 1200));
+        assert_eq!(
+            postcard::to_stdvec(&graph).unwrap(),
+            postcard::to_stdvec(&other).unwrap()
+        );
+        let distances = dijkstra_path_weights(&graph, stops[0].unwrap(), None, None);
+        assert_eq!(distances[&stops[1].unwrap()], 1000);
+    }
+
+    #[test]
+    fn closest_bounding_box_is_not_necessarily_the_closest_street() {
+        let mut graph = network(&[(0., 0.), (0.01, 0.), (0.01, 0.01), (0., 0.01)], 1000);
+        let a = graph.graph.add_node(StreetNode {
+            id: osm4routing::NodeId(3),
+            geometry: Point::new(0., 0.007),
+        });
+        let b = graph.graph.add_node(StreetNode {
+            id: osm4routing::NodeId(4),
+            geometry: Point::new(0.01, 0.007),
+        });
+        graph.graph.add_edge(
+            a,
+            b,
+            StreetEdge {
+                weight: 100,
+                geometry: vec![graph.graph[a].geometry, graph.graph[b].geometry],
+            },
+        );
+        graph.edge_rtree = graph.build_edge_index();
+        assert_eq!(
+            graph.nearest_edge(Point::new(0.005, 0.008)).unwrap().edge,
+            1
+        );
+        let stops = graph.link_stops(&[Point::new(0.005, 0.01), Point::new(0.005, 0.007)], 1000);
+        // Nearby polylines must not acquire a junction merely because we split them.
+        let distances = dijkstra_path_weights(&graph, stops[0].unwrap(), None, None);
+        assert!(!distances.contains_key(&stops[1].unwrap()));
+    }
+
+    #[test]
+    fn a_closed_way_can_be_split_without_losing_its_length() {
+        let mut graph = UnGraph::new_undirected();
+        let node = graph.add_node(StreetNode {
+            id: osm4routing::NodeId(1),
+            geometry: Point::new(0., 0.),
+        });
+        graph.add_edge(
+            node,
+            node,
+            StreetEdge {
+                weight: 1000,
+                geometry: vec![
+                    Point::new(0., 0.),
+                    Point::new(0., 0.01),
+                    Point::new(0.01, 0.01),
+                    Point::new(0., 0.),
+                ],
+            },
+        );
+        let mut network = StreetGraph::new(graph);
+        let stops = network.link_stops(&[Point::new(0., 0.005), Point::new(0.005, 0.01)], 1000);
+        assert!(stops.iter().all(Option::is_some));
+        assert_eq!(
+            network
+                .graph
+                .edge_weights()
+                .filter(|e| e.geometry.len() >= 2)
+                .map(|e| e.weight)
+                .sum::<Time>(),
+            1000
+        );
+    }
+
+    #[test]
+    fn nearest_edge_uses_metric_distance_at_high_latitude() {
+        let mut graph = network(&[(0., 60.001), (0.01, 60.001)], 100);
+        let a = graph.graph.add_node(StreetNode {
+            id: osm4routing::NodeId(3),
+            geometry: Point::new(0.0015, 59.99),
+        });
+        let b = graph.graph.add_node(StreetNode {
+            id: osm4routing::NodeId(4),
+            geometry: Point::new(0.0015, 60.01),
+        });
+        graph.graph.add_edge(
+            a,
+            b,
+            StreetEdge {
+                weight: 100,
+                geometry: vec![graph.graph[a].geometry, graph.graph[b].geometry],
+            },
+        );
+        graph.edge_rtree = graph.build_edge_index();
+        // 0.0015 longitude degrees is closer than 0.001 latitude degrees at 60 N.
+        assert_eq!(graph.nearest_edge(Point::new(0., 60.)).unwrap().edge, 1);
+    }
+}

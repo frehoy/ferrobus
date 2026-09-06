@@ -503,6 +503,22 @@ mod tests {
     }
 
     #[test]
+    fn nearby_queries_on_one_edge_do_not_visit_a_junction() {
+        let graph = create_test_graph();
+        let a = TransitPoint::new(Point::new(0.004, 0.), &graph, 100, 5).unwrap();
+        let b = TransitPoint::new(Point::new(0.0045, 0.), &graph, 100, 5).unwrap();
+        assert!(a.walking_paths.is_empty(), "neither junction is in budget");
+        assert_eq!(a.walking_time_to(&b), Some(40));
+        assert_eq!(b.walking_time_to(&a), Some(40));
+        let too_far = TransitPoint::new(Point::new(0.007, 0.), &graph, 100, 5).unwrap();
+        assert_eq!(a.walking_time_to(&too_far), None);
+        let off_street = TransitPoint::new(Point::new(0.0045, -0.0001), &graph, 100, 5).unwrap();
+        assert!(a.walking_time_to(&off_street).unwrap() > 40);
+        let many = crate::multimodal_routing_one_to_many(&graph, &a, &[b], 28800, 3).unwrap();
+        assert_eq!(many[0].as_ref().unwrap().travel_time, 40);
+    }
+
+    #[test]
     fn test_new_transit_point() {
         let graph = create_test_graph();
 
