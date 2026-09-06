@@ -25,11 +25,12 @@ const GRID_EGRESS_STOPS: usize = 3;
 /// How many candidate cells are snapped at a time while building the index.
 const SNAP_CHUNK: usize = 1 << 16;
 
-/// One grid cell's connection to the transit network: 32 bytes, heap-free.
+/// One grid cell's connection to the transit network, without a walking map.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct GridPoint {
     /// Street network node the cell centroid snapped to.
     node: u32,
+    location: Option<crate::model::StreetLocation>,
     /// How many entries of `stops` are populated.
     stop_count: u8,
     /// `(stop, walking seconds)` pairs, nearest first.
@@ -43,7 +44,7 @@ impl GridPoint {
         transit_model: &TransitModel,
         max_walking_time: Time,
     ) -> Option<Self> {
-        let (node, nearest_stops) = TransitPoint::snap_destination(
+        let (node, location, nearest_stops) = TransitPoint::snap_destination(
             centroid,
             transit_model,
             max_walking_time,
@@ -62,6 +63,7 @@ impl GridPoint {
 
         Some(Self {
             node,
+            location,
             stop_count,
             stops,
         })
@@ -69,6 +71,10 @@ impl GridPoint {
 }
 
 impl RoutingTarget for GridPoint {
+    fn direct_walking_from(&self, origin: &TransitPoint) -> Option<Time> {
+        origin.walking_time_to_location(self.target_node(), self.location)
+    }
+
     fn target_node(&self) -> NodeIndex {
         NodeIndex::new(self.node as usize)
     }
@@ -326,7 +332,7 @@ mod tests {
     #[test]
     fn grid_point_stays_compact() {
         assert!(
-            size_of::<GridPoint>() <= 32,
+            size_of::<GridPoint>() <= 64,
             "GridPoint grew to {} bytes",
             size_of::<GridPoint>()
         );

@@ -4,12 +4,12 @@ use hashbrown::HashMap;
 use petgraph::graph::NodeIndex;
 
 use crate::model::streets::IndexedPoint;
-use crate::{Error, RaptorStopId, Time, routing::dijkstra::dijkstra_path_weights};
+use crate::{Error, RaptorStopId, Time, routing::dijkstra::dijkstra_from_sources};
 use crate::{model::streets::StreetGraph, model::transit::data::PublicTransitData};
 use rstar::RTree;
 use serde::{Deserialize, Serialize};
 
-use super::Stop;
+use super::{Stop, StreetLocation};
 
 /// Unified transport network model containing data about public transit and street network
 #[derive(Debug, Serialize, Deserialize)]
@@ -192,37 +192,60 @@ impl TransitModel {
 pub struct TransitPoint {
     /// Point coordinates
     pub geometry: Point<f64>,
-    /// Nearest street network node
+    /// Closest endpoint of the projected edge; routing uses both endpoints.
     pub node_id: NodeIndex,
+    pub(crate) location: Option<StreetLocation>,
+    pub(crate) walking_budget: Time,
     /// Nearest stops (stop id, walking time)
     pub(crate) nearest_stops: Vec<(RaptorStopId, Time)>,
     /// Walking routes to other nodes
     pub(crate) walking_paths: HashMap<NodeIndex, Time>,
 }
 
+type SnappedWalk = (NodeIndex, Option<StreetLocation>, HashMap<NodeIndex, Time>);
+type SnappedDestination = (NodeIndex, Option<StreetLocation>, Vec<(RaptorStopId, Time)>);
+
 /// Snaps `point` onto the network and walks outwards, within the time budget.
 fn snap_and_walk(
     point: Point<f64>,
     graph: &TransitModel,
     max_walking_time: Time,
-) -> Result<(NodeIndex, Time, HashMap<NodeIndex, Time>), Error> {
-    let (node_id, distance) = graph
-        .street_graph
-        .nearest_node(&point)
-        .ok_or(Error::NoPointsFound)?;
-
-    if distance > max_walking_time {
-        return Err(Error::NoPointsFound);
-    }
-
-    let walking_paths = dijkstra_path_weights(
+) -> Result<SnappedWalk, Error> {
+    let (node_id, location, sources) = if let Some(snap) = graph.street_graph.nearest_edge(point) {
+        if snap.access > max_walking_time {
+            return Err(Error::NoPointsFound);
+        }
+        let node = if snap.costs[0] <= snap.costs[1] {
+            snap.nodes[0]
+        } else {
+            snap.nodes[1]
+        };
+        (
+            node,
+            Some(snap.location()),
+            vec![
+                (snap.nodes[0], snap.costs[0]),
+                (snap.nodes[1], snap.costs[1]),
+            ],
+        )
+    } else {
+        let (node, access) = graph
+            .street_graph
+            .nearest_node(&point)
+            .ok_or(Error::NoPointsFound)?;
+        if access > max_walking_time {
+            return Err(Error::NoPointsFound);
+        }
+        (node, None, vec![(node, access)])
+    };
+    let mut walking_paths = dijkstra_from_sources(
         &graph.street_graph,
-        node_id,
+        &sources,
         None,
-        Some(f64::from(max_walking_time - distance)),
+        Some(f64::from(max_walking_time)),
     );
-
-    Ok((node_id, distance, walking_paths))
+    walking_paths.retain(|_, time| *time <= max_walking_time);
+    Ok((node_id, location, walking_paths))
 }
 
 /// Picks the `max_stops` nearest stops from a walk-time map, `access` seconds in.
@@ -257,18 +280,15 @@ impl TransitPoint {
         max_walking_time: Time,
         max_stops: usize,
     ) -> Result<Self, Error> {
-        let (node_id, distance, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
-        let nearest_stops = nearest_stops_from_walk(
-            &walking_paths,
-            graph,
-            max_walking_time - distance,
-            distance,
-            max_stops,
-        );
+        let (node_id, location, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
+        let nearest_stops =
+            nearest_stops_from_walk(&walking_paths, graph, max_walking_time, 0, max_stops);
 
         Ok(TransitPoint {
             geometry: point,
             node_id,
+            location,
+            walking_budget: max_walking_time,
             nearest_stops,
             walking_paths,
         })
@@ -280,22 +300,52 @@ impl TransitPoint {
         graph: &TransitModel,
         max_walking_time: Time,
         max_stops: usize,
-    ) -> Result<(NodeIndex, Vec<(RaptorStopId, Time)>), Error> {
-        let (node_id, distance, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
-        let nearest_stops = nearest_stops_from_walk(
-            &walking_paths,
-            graph,
-            max_walking_time - distance,
-            distance,
-            max_stops,
-        );
+    ) -> Result<SnappedDestination, Error> {
+        let (node_id, location, walking_paths) = snap_and_walk(point, graph, max_walking_time)?;
+        let nearest_stops =
+            nearest_stops_from_walk(&walking_paths, graph, max_walking_time, 0, max_stops);
 
-        Ok((node_id, nearest_stops))
+        Ok((node_id, location, nearest_stops))
     }
 
     /// Returns walking time to another point, if available
     pub fn walking_time_to(&self, other: &TransitPoint) -> Option<Time> {
-        self.walking_time_to_node(other.node_id)
+        if self.geometry == other.geometry {
+            return Some(0);
+        }
+        self.walking_time_to_location(other.node_id, other.location)
+    }
+
+    pub(crate) fn walking_time_to_location(
+        &self,
+        node: NodeIndex,
+        location: Option<StreetLocation>,
+    ) -> Option<Time> {
+        let Some(target) = location else {
+            return self.walking_time_to_node(node);
+        };
+        let via_nodes = target
+            .nodes
+            .iter()
+            .zip(target.costs)
+            .filter_map(|(node, cost)| self.walking_paths.get(node)?.checked_add(cost))
+            .min();
+        // Two projections on the same edge need no trip through a junction.
+        let same_edge = self
+            .location
+            .filter(|source| source.edge == target.edge)
+            .and_then(|source| {
+                source
+                    .offset
+                    .abs_diff(target.offset)
+                    .checked_add(source.access)?
+                    .checked_add(target.access)
+            });
+        via_nodes
+            .into_iter()
+            .chain(same_edge)
+            .min()
+            .filter(|&cost| cost <= self.walking_budget)
     }
 
     /// Returns walking time to a street network node, if it is within range.
@@ -368,18 +418,39 @@ mod tests {
             n1,
             n2,
             StreetEdge {
-                weight: 793, // ~1110m / 1.4m/s = 793s
+                weight: 793,
+                geometry: Vec::new(),
             },
         );
 
-        graph.add_edge(n1, n3, StreetEdge { weight: 793 });
+        graph.add_edge(
+            n1,
+            n3,
+            StreetEdge {
+                weight: 793,
+                geometry: Vec::new(),
+            },
+        );
 
-        graph.add_edge(n2, n4, StreetEdge { weight: 793 });
+        graph.add_edge(
+            n2,
+            n4,
+            StreetEdge {
+                weight: 793,
+                geometry: Vec::new(),
+            },
+        );
 
-        graph.add_edge(n3, n4, StreetEdge { weight: 793 });
+        graph.add_edge(
+            n3,
+            n4,
+            StreetEdge {
+                weight: 793,
+                geometry: Vec::new(),
+            },
+        );
 
-        let rtree = build_rtree(&graph);
-        let street_network = StreetGraph { graph, rtree };
+        let street_network = StreetGraph::new(graph);
 
         // Create a minimal transit data model with stops at nodes 2 and 3
         let mut transit_data = PublicTransitData {
@@ -432,6 +503,22 @@ mod tests {
     }
 
     #[test]
+    fn nearby_queries_on_one_edge_do_not_visit_a_junction() {
+        let graph = create_test_graph();
+        let a = TransitPoint::new(Point::new(0.004, 0.), &graph, 100, 5).unwrap();
+        let b = TransitPoint::new(Point::new(0.0045, 0.), &graph, 100, 5).unwrap();
+        assert!(a.walking_paths.is_empty(), "neither junction is in budget");
+        assert_eq!(a.walking_time_to(&b), Some(40));
+        assert_eq!(b.walking_time_to(&a), Some(40));
+        let too_far = TransitPoint::new(Point::new(0.007, 0.), &graph, 100, 5).unwrap();
+        assert_eq!(a.walking_time_to(&too_far), None);
+        let off_street = TransitPoint::new(Point::new(0.0045, -0.0001), &graph, 100, 5).unwrap();
+        assert!(a.walking_time_to(&off_street).unwrap() > 40);
+        let many = crate::multimodal_routing_one_to_many(&graph, &a, &[b], 28800, 3).unwrap();
+        assert_eq!(many[0].as_ref().unwrap().travel_time, 40);
+    }
+
+    #[test]
     fn test_new_transit_point() {
         let graph = create_test_graph();
 
@@ -449,8 +536,8 @@ mod tests {
         // Should find 2 stops within walking distance (at nodes 2 and 3)
         assert_eq!(transit_point.nearest_stops.len(), 2);
 
-        // Check walking paths - should have paths to all 4 nodes
-        assert_eq!(transit_point.walking_paths.len(), 4);
+        // The diagonal node costs 1586s, beyond the 1000s budget.
+        assert_eq!(transit_point.walking_paths.len(), 3);
 
         // Check that the nearest stops are correctly ordered by time
         // Both stops should have the same walking time in this setup
@@ -517,7 +604,8 @@ mod tests {
                 NodeIndex::new(0),
                 node,
                 StreetEdge {
-                    weight: 500, // Less than our max walking time
+                    weight: 500,
+                    geometry: Vec::new(),
                 },
             );
 

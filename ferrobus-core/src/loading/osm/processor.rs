@@ -67,16 +67,19 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
         .map_err(|e| Error::InvalidData(format!("Error reading OSM data: {e}")))?;
     info!("OSM read: {} nodes, {} ways", nodes.len(), edges.len());
 
-    // Only a way's length is read, so the fat `Edge` values are dropped here.
-    let edges: Vec<(osm4routing::NodeId, osm4routing::NodeId, Time)> = edges
+    // Keep the polyline for stop and query projection; discard unused OSM metadata.
+    let edges: Vec<_> = edges
         .into_iter()
         .filter(|edge| edge.properties.foot == FootAccessibility::Allowed)
-        // A way whose ends are the same node is a loop nothing can route over.
-        .filter(|edge| edge.source != edge.target)
         .map(|edge| {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let weight = (edge.length() / WALKING_SPEED) as Time;
-            (edge.source, edge.target, weight)
+            (
+                edge.source,
+                edge.target,
+                weight,
+                edge.geometry.into_iter().map(Into::into).collect(),
+            )
         })
         .collect();
     info!("Kept {} pedestrian ways", edges.len());
@@ -96,7 +99,7 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
 
     info!("Indexed {} distinct OSM nodes", node_indices.len());
 
-    for (source, target, weight) in edges {
+    for (source, target, weight, geometry) in edges {
         let source_index = *node_indices
             .get(&source)
             .ok_or_else(|| Error::InvalidData(format!("Missing source node: {source:?}")))?;
@@ -104,7 +107,7 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
             .get(&target)
             .ok_or_else(|| Error::InvalidData(format!("Missing target node: {target:?}")))?;
 
-        graph.add_edge(source_index, target_index, StreetEdge { weight });
+        graph.add_edge(source_index, target_index, StreetEdge { weight, geometry });
     }
 
     // One entry per OSM node, and nothing below reads it.
@@ -126,9 +129,7 @@ pub(crate) fn create_street_graph(filename: impl AsRef<Path>) -> Result<StreetGr
     );
 
     info!("Building R-Tree spatial index");
-    let rtree = build_rtree(&graph);
-
-    let street_network = StreetGraph { graph, rtree };
+    let street_network = StreetGraph::new(graph);
 
     Ok(street_network)
 }
@@ -162,9 +163,30 @@ mod tests {
         let n2 = graph.add_node(node(3, 2.0));
         let n3 = graph.add_node(node(4, 10.0));
         let n4 = graph.add_node(node(5, 11.0));
-        graph.add_edge(n0, n1, StreetEdge { weight: 10 });
-        graph.add_edge(n1, n2, StreetEdge { weight: 20 });
-        graph.add_edge(n3, n4, StreetEdge { weight: 30 });
+        graph.add_edge(
+            n0,
+            n1,
+            StreetEdge {
+                weight: 10,
+                geometry: Vec::new(),
+            },
+        );
+        graph.add_edge(
+            n1,
+            n2,
+            StreetEdge {
+                weight: 20,
+                geometry: Vec::new(),
+            },
+        );
+        graph.add_edge(
+            n3,
+            n4,
+            StreetEdge {
+                weight: 30,
+                geometry: Vec::new(),
+            },
+        );
 
         keep_largest_component(&mut graph).expect("a graph with edges has a component");
 

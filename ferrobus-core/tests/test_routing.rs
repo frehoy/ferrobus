@@ -39,7 +39,7 @@ fn test_find_route() {
         .expect("Routing failed")
         .expect("Must return a route");
 
-    assert_eq!(result.travel_time, 1566);
+    assert_eq!(result.travel_time, 1644);
     assert!(result.transfers <= 2);
 }
 
@@ -59,8 +59,8 @@ fn test_find_routes_one_to_many() {
     assert_eq!(results.len(), 2);
 
     // Check individual route results based on Python test values
-    assert_eq!(results[0].as_ref().unwrap().travel_time, 1524);
-    assert_eq!(results[1].as_ref().unwrap().travel_time, 735);
+    assert_eq!(results[0].as_ref().unwrap().travel_time, 1546);
+    assert_eq!(results[1].as_ref().unwrap().travel_time, 729);
 }
 
 #[test]

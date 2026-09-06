@@ -304,7 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 model.route_count()
             );
 
-            // Where a point lands explains a routing difference better than the journey does.
+            // node_id identifies an endpoint; query costs also include the partial edge.
             let snap_report = |label: &str, point: Point<f64>, tp: &TransitPoint| {
                 let node = model.street_graph().graph[tp.node_id].geometry;
                 let (dx, dy) = (node.x() - point.x(), node.y() - point.y());
@@ -313,7 +313,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     + (dx * 111_320.0 * point.y().to_radians().cos()).powi(2))
                 .sqrt();
                 println!(
-                    "  {label}: node={} at ({:.5}, {:.5}), {metres:.0} m from query",
+                    "  {label}: endpoint node={} at ({:.5}, {:.5}), {metres:.0} m from query",
                     tp.node_id.index(),
                     node.x(),
                     node.y()
@@ -340,6 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let to = TransitPoint::new(to_pt, &model, 1200, 3)?;
             snap_report("from", from_pt, &from);
             snap_report("to", to_pt, &to);
+            println!("direct walking={:?}s", from.walking_time_to(&to));
             match multimodal_routing(&model, &from, &to, departure_time, max_transfers)? {
                 Some(result) => println!(
                     "travel={}s walking={}s transit={:?}s transfers={}",
@@ -352,6 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The walking route between two points, so a detour can be seen rather
         // than inferred from its duration.
         "walk-path" => {
+            println!("Node-to-node diagnostic; query routing uses edge projections.");
             let model_path = PathBuf::from(&args[1]);
             let coords: Vec<f64> = args[2..6]
                 .iter()

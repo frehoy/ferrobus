@@ -12,11 +12,20 @@ pub trait RoutingTarget {
     /// The street network node this destination snapped to.
     fn target_node(&self) -> NodeIndex;
 
+    /// Direct walking cost from an origin, including the destination attachment.
+    fn direct_walking_from(&self, origin: &TransitPoint) -> Option<Time> {
+        origin.walking_time_to_node(self.target_node())
+    }
+
     /// Nearby stops to alight at, as `(stop, walking seconds)`, nearest first.
     fn egress_stops(&self) -> impl Iterator<Item = (RaptorStopId, Time)> + '_;
 }
 
 impl RoutingTarget for TransitPoint {
+    fn direct_walking_from(&self, origin: &TransitPoint) -> Option<Time> {
+        origin.walking_time_to(self)
+    }
+
     fn target_node(&self) -> NodeIndex {
         self.node_id
     }
@@ -215,7 +224,7 @@ pub fn multimodal_routing_one_to_many<T: RoutingTarget>(
     }
 
     for (end_idx, end_point) in end_points.iter().enumerate() {
-        let direct_walking = start_point.walking_time_to_node(end_point.target_node());
+        let direct_walking = end_point.direct_walking_from(start_point);
         let mut best_candidate: Option<CandidateJourney> = None;
 
         for (_access_stop, (access_time, transit_times)) in &transit_results {
@@ -281,11 +290,11 @@ mod tests {
     use petgraph::graph::{NodeIndex, UnGraph};
 
     use super::{multimodal_routing, multimodal_routing_one_to_many};
+    use crate::Error;
     use crate::model::{
         FeedMeta, PublicTransitData, Route, Stop, StopTime, StreetGraph, StreetNode, Transfer,
         TransitModel, TransitModelMeta, TransitPoint, Trip,
     };
-    use crate::{Error, loading::build_rtree};
 
     fn build_model(with_colocated_transfer: bool) -> TransitModel {
         let mut graph = UnGraph::new_undirected();
@@ -297,10 +306,7 @@ mod tests {
             id: NodeId(2),
             geometry: Point::new(1.0, 1.0),
         });
-        let street_graph = StreetGraph {
-            rtree: build_rtree(&graph),
-            graph,
-        };
+        let street_graph = StreetGraph::new(graph);
 
         // Stops:
         // - 0: canonical stop at n0 used by TransitPoint
@@ -434,12 +440,16 @@ mod tests {
         let invalid_start = TransitPoint {
             geometry: Point::new(0.0, 0.0),
             node_id: NodeIndex::new(0),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(usize::MAX, 0)],
             walking_paths: HashMap::new(),
         };
         let end = TransitPoint {
             geometry: Point::new(1.0, 1.0),
             node_id: NodeIndex::new(1),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(2, 0)],
             walking_paths: HashMap::new(),
         };

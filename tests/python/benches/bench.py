@@ -40,8 +40,8 @@ def test_find_routes_one_to_many(model, benchmark):
         for res in results:
             assert res is None or isinstance(res, dict)
 
-        assert results[0]["travel_time_seconds"] == 1524
-        assert results[1]["travel_time_seconds"] == 735
+        assert results[0]["travel_time_seconds"] == 1546
+        assert results[1]["travel_time_seconds"] == 729
 
 
 def test_calculate_isochrone_performance(model, isochrone_index, benchmark):

@@ -48,7 +48,7 @@ const MAGIC: &[u8; 8] = b"FERROBUS";
 ///
 /// Bump this whenever a persisted structure changes shape, so that older files
 /// are rejected instead of being silently misread.
-const FORMAT_VERSION: u16 = 2;
+const FORMAT_VERSION: u16 = 3;
 
 /// Scratch for streaming decode: enough for the longest `String`, but a borrowed field would consume it cumulatively.
 const SCRATCH_LEN: usize = 1 << 20;

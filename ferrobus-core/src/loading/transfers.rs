@@ -13,7 +13,7 @@ pub(crate) fn calculate_transfers(graph: &mut TransitModel) {
 
     info!("Calculating transfers between {stop_count} stops");
 
-    // Snap all transit stops to street network nodes (Some = snapped, None = too far)
+    // Split streets at stop projections (Some = linked stop node, None = too far)
     let stop_nodes = snap_stops_to_network(graph);
     info!(
         "Snapped {} of {stop_count} stops to the street network",
@@ -170,32 +170,18 @@ fn merge_transfers(
         .collect()
 }
 
-/// Snap transit stops to their nearest street network nodes
+/// Project transit stops onto street edges and link their physical locations
 /// Returns None for stops that are too far from any street (> max_transfer_time walking distance)
-fn snap_stops_to_network(graph: &TransitModel) -> Vec<Option<NodeIndex>> {
-    let max_snap_distance = graph.meta.max_transfer_time;
-
-    graph
+fn snap_stops_to_network(graph: &mut TransitModel) -> Vec<Option<NodeIndex>> {
+    let points: Vec<_> = graph
         .transit_data
         .stops
         .iter()
-        .map(|stop| {
-            if let Some((node, walking_time)) = graph.street_graph.nearest_node(&stop.geometry) {
-                if walking_time <= max_snap_distance {
-                    Some(node)
-                } else {
-                    log::trace!(
-                        "Stop at {:?} is {}s walk from nearest street (max: {}s) - excluding from transfers",
-                        stop.geometry, walking_time, max_snap_distance
-                    );
-                    None
-                }
-            } else {
-                log::trace!("Stop at {:?} has no nearby streets - excluding from transfers", stop.geometry);
-                None
-            }
-        })
-        .collect()
+        .map(|stop| stop.geometry)
+        .collect();
+    graph
+        .street_graph
+        .link_stops(&points, graph.meta.max_transfer_time)
 }
 
 /// Calculate transfers for all stops using parallel processing
