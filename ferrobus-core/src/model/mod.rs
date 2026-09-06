@@ -19,3 +19,5 @@ pub use transit::data::PublicTransitData;
 pub use transit::types::{
     FeedMeta, RaptorStopId, Route, RouteId, Stop, StopTime, Time, Transfer, Trip,
 };
+
+pub(crate) use streets::StreetLocation;

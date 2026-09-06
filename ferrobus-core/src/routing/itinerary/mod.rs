@@ -126,7 +126,6 @@ mod tests {
     use petgraph::graph::{NodeIndex, UnGraph};
 
     use super::traced_multimodal_routing;
-    use crate::loading::build_rtree;
     use crate::model::{
         FeedMeta, PublicTransitData, Route, Stop, StopTime, StreetEdge, StreetGraph, StreetNode,
         TransitModel, TransitModelMeta, TransitPoint, Trip,
@@ -142,12 +141,16 @@ mod tests {
             id: NodeId(2),
             geometry: Point::new(1.0, 0.0),
         });
-        graph.add_edge(n0, n1, StreetEdge { weight: 20 });
+        graph.add_edge(
+            n0,
+            n1,
+            StreetEdge {
+                weight: 20,
+                geometry: Vec::new(),
+            },
+        );
 
-        let street_graph = StreetGraph {
-            rtree: build_rtree(&graph),
-            graph,
-        };
+        let street_graph = StreetGraph::new(graph);
 
         let transit_data = PublicTransitData {
             routes: vec![Route {
@@ -215,10 +218,7 @@ mod tests {
             id: NodeId(12),
             geometry: Point::new(1.0, 0.0),
         });
-        let street_graph = StreetGraph {
-            rtree: build_rtree(&graph),
-            graph,
-        };
+        let street_graph = StreetGraph::new(graph);
 
         let transit_data = PublicTransitData {
             routes: vec![Route {
@@ -298,12 +298,16 @@ mod tests {
         let start = TransitPoint {
             geometry: Point::new(0.0, 0.0),
             node_id: NodeIndex::new(0),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(0, 0)],
             walking_paths: HashMap::from([(NodeIndex::new(0), 0), (NodeIndex::new(1), 20)]),
         };
         let end = TransitPoint {
             geometry: Point::new(1.0, 0.0),
             node_id: NodeIndex::new(1),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(1, 0)],
             walking_paths: HashMap::from([(NodeIndex::new(1), 0)]),
         };
@@ -324,12 +328,16 @@ mod tests {
         let start = TransitPoint {
             geometry: Point::new(0.0, 0.0),
             node_id: NodeIndex::new(0),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(0, 0), (2, 30)],
             walking_paths: HashMap::new(),
         };
         let end = TransitPoint {
             geometry: Point::new(1.0, 0.0),
             node_id: NodeIndex::new(1),
+            location: None,
+            walking_budget: crate::Time::MAX,
             nearest_stops: vec![(1, 0), (3, 5)],
             walking_paths: HashMap::new(),
         };

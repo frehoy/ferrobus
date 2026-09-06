@@ -18,9 +18,29 @@ pub struct StreetGraph {
     pub graph: UnGraph<StreetNode, StreetEdge>,
     /// Spatial index for fast nearest node search
     pub rtree: RTree<IndexedPoint>,
+    pub(super) edge_rtree: RTree<super::snapping::IndexedEdge>,
 }
 
 impl StreetGraph {
+    /// Construct spatial indexes, using endpoint geometry for hand-built edges.
+    pub fn new(mut graph: UnGraph<StreetNode, StreetEdge>) -> Self {
+        for id in graph.edge_indices().collect::<Vec<_>>() {
+            if graph[id].geometry.is_empty()
+                && let Some((a, b)) = graph.edge_endpoints(id)
+            {
+                graph[id].geometry = vec![graph[a].geometry, graph[b].geometry];
+            }
+        }
+        let rtree = crate::loading::build_rtree(&graph);
+        let mut result = Self {
+            graph,
+            rtree,
+            edge_rtree: RTree::new(),
+        };
+        result.edge_rtree = result.build_edge_index();
+        result
+    }
+
     pub(crate) fn edges(
         &self,
         node: NodeIndex,
@@ -60,8 +80,7 @@ mod tests {
             geometry: Point::new(2.0, 2.0),
         });
 
-        let rtree = crate::loading::build_rtree(&graph);
-        let network = StreetGraph { graph, rtree };
+        let network = StreetGraph::new(graph);
 
         let (node, _) = network.nearest_node(&Point::new(0.4, 0.4)).unwrap();
         assert_eq!(node, a);

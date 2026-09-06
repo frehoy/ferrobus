@@ -7,7 +7,6 @@ mod gtfs;
 mod osm;
 mod transfers;
 
-#[cfg(test)]
 pub(crate) use osm::build_rtree;
 
 pub use builder::create_transit_model;

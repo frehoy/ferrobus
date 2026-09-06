@@ -49,8 +49,9 @@ def test_travel_time_matrix(model):
     )
     assert isinstance(matrix, list)
     assert len(matrix) == len(points)
-    assert matrix[0] == [0, 1044]
-    assert matrix[1] == [1253, 0]
+    # Edge projections and off-street connectors are included in these costs.
+    assert matrix[0] == [0, 1066]
+    assert matrix[1] == [1278, 0]
 
 
 def test_find_route(model):
@@ -64,7 +65,7 @@ def test_find_route(model):
         max_transfers=2,
     )
     assert isinstance(result, dict)
-    assert result["travel_time_seconds"] == 1566
+    assert result["travel_time_seconds"] == 1644
 
 
 def test_find_routes_one_to_many(model):
@@ -85,8 +86,8 @@ def test_find_routes_one_to_many(model):
     for res in results:
         assert res is None or isinstance(res, dict)
 
-    assert results[0]["travel_time_seconds"] == 1524
-    assert results[1]["travel_time_seconds"] == 735
+    assert results[0]["travel_time_seconds"] == 1546
+    assert results[1]["travel_time_seconds"] == 729
 
 
 def test_transit_point_properties(model):
@@ -114,25 +115,25 @@ def test_range_multimodal_routing(model):
     assert eval(result.__str__()) == {
         "journeys": [
             {
-                "travel_time": 809,
+                "travel_time": 893,
                 "transfers": 1,
-                "walking_time": 52,
-                "departure_time": 43957,
-                "arrival_time": 44766,
+                "walking_time": 82,
+                "departure_time": 43951,
+                "arrival_time": 44844,
             },
             {
-                "travel_time": 1109,
+                "travel_time": 1193,
                 "transfers": 1,
-                "walking_time": 52,
-                "departure_time": 43657,
-                "arrival_time": 44766,
+                "walking_time": 82,
+                "departure_time": 43651,
+                "arrival_time": 44844,
             },
             {
-                "travel_time": 1469,
+                "travel_time": 1553,
                 "transfers": 1,
-                "walking_time": 52,
-                "departure_time": 43297,
-                "arrival_time": 44766,
+                "walking_time": 82,
+                "departure_time": 43291,
+                "arrival_time": 44844,
             },
         ]
     }
@@ -152,11 +153,11 @@ def test_pareto_range_multimodal_routing(model):
     assert eval(result.__str__()) == {
         "journeys": [
             {
-                "travel_time": 809,
+                "travel_time": 893,
                 "transfers": 1,
-                "walking_time": 52,
-                "departure_time": 43957,
-                "arrival_time": 44766,
+                "walking_time": 82,
+                "departure_time": 43951,
+                "arrival_time": 44844,
             }
         ]
     }

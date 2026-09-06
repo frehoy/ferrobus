@@ -14,14 +14,26 @@ pub fn dijkstra_path_weights(
     target: Option<NodeIndex>,
     max_cost: Option<f64>,
 ) -> HashMap<NodeIndex, u32> {
+    dijkstra_from_sources(graph, &[(start, 0)], target, max_cost)
+}
+
+pub(crate) fn dijkstra_from_sources(
+    graph: &StreetGraph,
+    sources: &[(NodeIndex, u32)],
+    target: Option<NodeIndex>,
+    max_cost: Option<f64>,
+) -> HashMap<NodeIndex, u32> {
     let mut distances: HashMap<NodeIndex, u32> = HashMap::new();
     let mut heap = BinaryHeap::new();
-
-    heap.push(State {
-        cost: 0,
-        node: start,
-    });
-    distances.insert(start, 0);
+    for &(node, cost) in sources {
+        if max_cost.is_some_and(|max| f64::from(cost) > max) {
+            continue;
+        }
+        if distances.get(&node).is_none_or(|&old| cost < old) {
+            distances.insert(node, cost);
+            heap.push(State { cost, node });
+        }
+    }
 
     while let Some(State { cost, node }) = heap.pop() {
         if let Some(target_node) = target

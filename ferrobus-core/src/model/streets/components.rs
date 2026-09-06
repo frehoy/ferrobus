@@ -38,6 +38,8 @@ mod node_id_serde {
 pub struct StreetEdge {
     /// Pedestrian crossing time in seconds
     pub weight: Time,
+    /// Polyline in source-to-target order. A single point marks a stop connector.
+    pub geometry: Vec<Point<f64>>,
 }
 
 impl StreetEdge {
